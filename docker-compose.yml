@@ -1,0 +1,84 @@
+services:
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: payroll_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: payroll
+      POSTGRES_PASSWORD: payroll
+      POSTGRES_DB: payroll
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payroll -d payroll"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: payroll_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ─── API ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      target: prod
+    container_name: payroll_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── Worker ─────────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+      target: prod
+    container_name: payroll_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Frontend (placeholder) ─────────────────────────────────────────────────
+  frontend:
+    image: nginx:alpine
+    container_name: payroll_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    volumes:
+      - ./docker/nginx-placeholder.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/placeholder-index.html:/usr/share/nginx/html/index.html:ro
+
+volumes:
+  pgdata:

@@ -1,0 +1,2 @@
+-- Initial migration: empty schema baseline
+-- Models will be added in subsequent changes (event-submission-api)

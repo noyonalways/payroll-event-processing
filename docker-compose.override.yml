@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      target: dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+    command: npm run dev
+
+  worker:
+    build:
+      target: dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+    command: npm run dev:worker
