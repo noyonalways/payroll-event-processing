@@ -1,0 +1,77 @@
+schema: spec-driven
+
+context: |
+  # Payroll Event Processing Service
+
+  ## Tech Stack
+  - Runtime: Node.js 20 LTS
+  - Language: TypeScript (strict mode)
+  - Framework: NestJS 11 (latest stable, v11.2.x — native Express v5 support, built-in JSON logging)
+  - Database: PostgreSQL 16 via Prisma ORM
+  - Queue: Redis 7 + BullMQ
+  - Containerisation: Docker + Docker Compose
+  - CI: GitHub Actions
+  - Frontend: React + Vite (minimal demo UI)
+  - Testing: Jest + Supertest + @nestjs/testing (unit → @nestjs/testing mocks; integration → real DB/Redis in Docker; e2e → Supertest full HTTP)
+  - API Documentation: Swagger / OpenAPI via @nestjs/swagger (Swagger UI at GET /api-docs; JSON spec at GET /api-docs-json)
+  - Package manager: npm workspaces (monorepo-lite)
+  - Linter: ESLint + Prettier
+
+  ## Domain
+  An asynchronous payroll event processing service. Employees submit payroll changes
+  (BANK_ACCOUNT_CHANGE, ADDRESS_CHANGE, SALARY_CHANGE). Events are persisted
+  immediately and enqueued for background processing by a BullMQ worker. The HTTP
+  request is never blocked by slow processing.
+
+  ## Folder structure
+  - src/                  — NestJS API (shared with worker)
+    - events/             — Controller, DTOs, service, validation
+    - processing/         — Handler strategy registry, per-type processors
+    - queue/              — BullMQ module, producer, consumer, FIFO config
+    - common/             — Global pipes, filters, idempotency guard, logger
+    - prisma/             — PrismaService, PrismaModule
+  - apps/worker/          — Standalone BullMQ worker entrypoint
+  - prisma/               — Schema + migrations
+  - frontend/             — Vite + React minimal demo
+  - docker/               — Dockerfiles
+  - test/                 — e2e / integration tests
+  - .github/workflows/    — CI pipeline
+
+  ## Key Reliability Requirements
+  1. Temporary vs permanent failure — transient errors retry (exponential backoff);
+     business/validation errors are permanent failures (no retry).
+  2. Idempotency — Idempotency-Key header + DB unique constraint prevent duplicate effects.
+  3. Concurrency safety — per-employee FIFO via BullMQ job naming; DB row locking
+     (SELECT … FOR UPDATE) to prevent concurrent processing of same employee.
+  4. Worker crash recovery — events transition to `processing` before work starts;
+     BullMQ stalled-job detection re-queues stuck jobs.
+  5. Exactly-once processing — success write is transactional and guarded by status check
+     so crash-then-reprocess never applies a change twice.
+  6. Per-employee ordering — stable `sequence` column; FIFO queue group by employeeId;
+     parallel across different employees.
+  7. Extensibility — handler strategy registry makes new event types a drop-in addition.
+
+  ## Event Lifecycle States
+  received → queued → processing → success | failed
+
+  ## Conventions
+  - Conventional commits (feat:, fix:, chore:, test:, docs:)
+  - camelCase for TypeScript, snake_case for DB columns
+  - All DTOs use class-validator decorators
+  - All errors logged with context (eventId, employeeId, eventType, attempt)
+  - No authentication required (out of scope)
+
+rules:
+  proposal:
+    - Keep proposals concise — focus on "what" and "why", not "how"
+    - Always include a Non-goals section
+    - Reference the relevant reliability concepts from the project context
+  design:
+    - Include the exact file paths that will be created or modified
+    - Note which reliability concept(s) each design decision addresses
+    - Describe DB schema changes (columns, indexes, constraints) explicitly
+  tasks:
+    - Break each task into steps completable in under 2 hours
+    - Order tasks so dependencies come first
+    - Note which tests should be written alongside implementation (not after)
+    - Flag any task that touches a reliability-critical path
