@@ -28,6 +28,9 @@ import { EventsModule } from './events/events.module';
           .default('log'),
         PAYROLL_TEMPORARY_FAILURE_RATE: Joi.number().min(0).max(1).default(0.25),
         PAYROLL_PERMANENT_FAILURE_RATE: Joi.number().min(0).max(1).default(0.05),
+        PAYROLL_FAILURE_MODE: Joi.string()
+          .valid('random', 'always-success', 'always-transient', 'always-permanent')
+          .default('random'),
       }),
       validationOptions: {
         allowUnknown: true,

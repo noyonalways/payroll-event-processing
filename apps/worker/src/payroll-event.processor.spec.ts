@@ -4,11 +4,15 @@ import { PayrollEventQueueService } from '../../../src/queue/payroll-event-queue
 import { PAYROLL_EVENT_JOB } from '../../../src/queue/queue.constants';
 import { EventStatus } from '@prisma/client';
 import { EventType } from '../../../src/events/event-type';
+import { ProcessingResult } from '../../../src/processing/processing.types';
+import { HandlerRegistry } from '../../../src/processing/handler-registry';
+import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
 
 /**
  * Direct-instantiation unit tests. The processor must not touch `WorkerHost.worker`
  * at construction (BullRegistrar only populates it during Nest's onModuleInit), so
- * `new PayrollEventProcessor(prisma, queueService)` below is safe in isolation.
+ * `new PayrollEventProcessor(prisma, queueService, registry)` below is safe in
+ * isolation.
  *
  * FIFO continuation is driven by the BullMQ `completed` event (NOT from inside
  * `process()` — while `process()` runs the job is still active and its own
@@ -21,10 +25,28 @@ describe('PayrollEventProcessor', () => {
   const prisma = {
     payrollEvent: {
       updateMany: jest.fn(),
+      findUnique: jest.fn(),
       findFirst: jest.fn(),
     },
   };
   const queueService = { enqueue: jest.fn() };
+  const registry = { resolve: jest.fn() };
+
+  const successResult: ProcessingResult = {
+    reference: 'SIM-test-ref',
+    employeeId: 'emp-1',
+    effectiveDate: '2026-09-01',
+    acknowledged: { iban: 'DE89370400440532013000' },
+  };
+
+  const stubStrategy = (behavior: 'success' | 'fail') => ({
+    handle: jest.fn(async () => {
+      if (behavior === 'fail') {
+        throw new TransientPayrollFailureError('simulated down');
+      }
+      return successResult;
+    }),
+  });
 
   const job = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -43,14 +65,22 @@ describe('PayrollEventProcessor', () => {
     processor = new PayrollEventProcessor(
       prisma as unknown as PrismaService,
       queueService as unknown as PayrollEventQueueService,
+      registry as unknown as HandlerRegistry,
     );
     prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
+    prisma.payrollEvent.findUnique.mockResolvedValue({
+      payload: successResult.acknowledged,
+    });
     prisma.payrollEvent.findFirst.mockResolvedValue(null);
     queueService.enqueue.mockResolvedValue(undefined);
   });
 
-  describe('claim → success lifecycle', () => {
-    it('ensures queued, claims processing, and succeeds with processed_at', async () => {
+  describe('claim → dispatch → success lifecycle', () => {
+    beforeEach(() => {
+      registry.resolve.mockReturnValue(stubStrategy('success'));
+    });
+
+    it('claims, dispatches via the registry, and stores the result with processed_at', async () => {
       await processor.process(job());
 
       expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(1, {
@@ -61,31 +91,63 @@ describe('PayrollEventProcessor', () => {
         where: { id: 'evt-1', status: EventStatus.QUEUED },
         data: { status: EventStatus.PROCESSING },
       });
+
+      expect(prisma.payrollEvent.findUnique).toHaveBeenCalledWith({
+        where: { id: 'evt-1' },
+        select: { payload: true },
+      });
+      expect(registry.resolve).toHaveBeenCalledWith(EventType.BANK_ACCOUNT_CHANGE);
+
       expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(3, {
         where: { id: 'evt-1', status: EventStatus.PROCESSING },
         data: {
           status: EventStatus.SUCCESS,
           processedAt: expect.any(Date),
+          result: successResult,
         },
       });
     });
+  });
 
-    it('skips a stale/duplicate job (row not queued) with no state change', async () => {
+  describe('handler failure lifecycle', () => {
+    beforeEach(() => {
+      registry.resolve.mockReturnValue(stubStrategy('fail'));
+    });
+
+    it('transitions to failed with no result and does not re-enqueue', async () => {
+      await processor.process(job());
+
+      expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(3, {
+        where: { id: 'evt-1', status: EventStatus.PROCESSING },
+        data: { status: EventStatus.FAILED },
+      });
+      // Exactly the 3 guarded updates — the success write never happens.
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(3);
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stale / duplicate job', () => {
+    it('skips a job whose row is not queued and never invokes a handler', async () => {
       prisma.payrollEvent.updateMany
         .mockResolvedValueOnce({ count: 0 }) // received → queued: no match
         .mockResolvedValueOnce({ count: 0 }); // queued → processing: no match
 
       await processor.process(job());
 
-      // No terminal update, no relay — the job is a no-op.
+      // No terminal update, no payload read, no handler, no relay.
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(2);
+      expect(prisma.payrollEvent.findUnique).not.toHaveBeenCalled();
+      expect(registry.resolve).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.findFirst).not.toHaveBeenCalled();
       expect(queueService.enqueue).not.toHaveBeenCalled();
     });
 
     it('never double-applies: a crash-then-reprocess cannot succeed twice', async () => {
       // Terminal update already applied (row already SUCCESS) → claim fails.
-      prisma.payrollEvent.updateMany.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 0 });
+      prisma.payrollEvent.updateMany
+        .mockResolvedValueOnce({ count: 0 })
+        .mockResolvedValueOnce({ count: 0 });
 
       await processor.process(job());
 
@@ -147,7 +209,9 @@ describe('PayrollEventProcessor', () => {
       await processor.onCompleted(job());
 
       expect(prisma.payrollEvent.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ employeeId: 'emp-1' }) }),
+        expect.objectContaining({
+          where: expect.objectContaining({ employeeId: 'emp-1' }),
+        }),
       );
     });
 

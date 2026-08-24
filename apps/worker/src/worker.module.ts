@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule } from '../../../src/prisma/prisma.module';
 import { QueueModule } from '../../../src/queue/queue.module';
+import { ProcessingModule } from '../../../src/processing/processing.module';
 import { PayrollEventProcessor } from './payroll-event.processor';
 
 @Module({
@@ -21,6 +22,9 @@ import { PayrollEventProcessor } from './payroll-event.processor';
           .default('log'),
         PAYROLL_TEMPORARY_FAILURE_RATE: Joi.number().min(0).max(1).default(0.25),
         PAYROLL_PERMANENT_FAILURE_RATE: Joi.number().min(0).max(1).default(0.05),
+        PAYROLL_FAILURE_MODE: Joi.string()
+          .valid('random', 'always-success', 'always-transient', 'always-permanent')
+          .default('random'),
       }),
       validationOptions: {
         allowUnknown: true,
@@ -29,6 +33,7 @@ import { PayrollEventProcessor } from './payroll-event.processor';
     }),
     PrismaModule,
     QueueModule,
+    ProcessingModule,
   ],
   providers: [PayrollEventProcessor],
 })

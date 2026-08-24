@@ -36,6 +36,8 @@ model PayrollEvent {
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")
   processedAt    DateTime?   @map("processed_at")
+  /// Result of the simulated external payroll operation, set only on success.
+  result         Json?       @map("result")
 
   @@unique([employeeId, sequence])
   @@index([status])

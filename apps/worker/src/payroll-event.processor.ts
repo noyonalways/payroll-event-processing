@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
-import { EventStatus } from '@prisma/client';
+import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import {
   PayrollEventQueueService,
@@ -11,6 +11,9 @@ import {
   PAYROLL_EVENTS_QUEUE,
   PAYROLL_EVENT_JOB,
 } from '../../../src/queue/queue.constants';
+import { HandlerRegistry } from '../../../src/processing/handler-registry';
+import { ProcessingResult } from '../../../src/processing/processing.types';
+import { EventType } from '../../../src/events/event-type';
 
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
@@ -21,9 +24,11 @@ import {
  *   in `queued` state is stale/duplicate and skipped with no side effects — this
  *   already prevents a crash-then-reprocess from applying success twice (R5
  *   scaffold). Full row locks + exactly-once commit land in #7.
- * - The terminal `processing → success` with the status guard is scaffolding:
- *   the simulated provider call and attempt history (#4/#5) will sit between
- *   claim and terminal.
+ * - Between claim and terminal the worker dispatches to the per-type handler
+ *   strategy registry (`src/processing`): on success the handler's result is
+ *   stored with the guarded `processing → success`; on simulated failure the
+ *   row transitions to `failed` (transient vs permanent retry strategy lands
+ *   in #5 — here both classes are terminal).
  * - FIFO continuation happens on the BullMQ `completed` event, NOT at the end of
  *   `process()`: while `process()` runs the current job is still ACTIVE, so an
  *   `add` with the same `jobId = employeeId` would be suppressed by its own key.
@@ -51,6 +56,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueService: PayrollEventQueueService,
+    private readonly registry: HandlerRegistry,
   ) {
     super();
   }
@@ -82,6 +88,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
 
   async process(job: Job<PayrollEventJobInput>): Promise<void> {
     const { eventId, employeeId, eventType, sequence } = job.data;
+    const attempt = (job.attemptsMade ?? 0) + 1;
 
     // 1. Claim — a relayed job may still find the row `received`; ensure queued
     //    (no-op when the producer already flipped it), then claim processing.
@@ -105,19 +112,65 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       return;
     }
 
-    // 2. The processing step for this change IS the structured log below; the
-    //    simulated provider call + attempt recording land in #4.
+    // 2. Read the event payload (the job data deliberately carries identity
+    //    only, not the body — the DB row stays the source of truth).
+    const row = await this.prisma.payrollEvent.findUnique({
+      where: { id: eventId },
+      select: { payload: true },
+    });
+    if (!row) {
+      this.logger.warn(`Event row ${eventId} not found — skipping job`);
+      return;
+    }
+
+    // 3. Dispatch to the handler for this event type (strategy registry).
+    const strategy = this.registry.resolve(eventType);
     this.logger.log(
       `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
-        `(seq ${sequence}, attempt 1, worker ${this.workerPid})`,
+        `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — started`,
     );
 
-    // 3. Terminal state (guarded — only a row in processing may succeed).
+    let result: ProcessingResult;
+    try {
+      result = await strategy.handle({
+        eventId,
+        eventType: eventType as EventType,
+        employeeId,
+        sequence,
+        payload: row.payload as Record<string, unknown>,
+        attempt,
+      });
+    } catch (error) {
+      // Simulated provider failure → terminal `failed` (guarded). The transient
+      // vs permanent retry/dead-letter handling lands in #5; here both classes
+      // mark the row failed and the job is NOT re-enqueued.
+      await this.prisma.payrollEvent.updateMany({
+        where: { id: eventId, status: EventStatus.PROCESSING },
+        data: { status: EventStatus.FAILED },
+      });
+      this.logger.log(
+        `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
+          `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — failed: ${this.errorMessage(error)}`,
+      );
+      return;
+    }
+
+    // 4. Terminal success — result + processed_at written together in the same
+    //    guarded update, so a crash-then-reprocess can never apply the change
+    //    twice or double-write a result (R5).
     await this.prisma.payrollEvent.updateMany({
       where: { id: eventId, status: EventStatus.PROCESSING },
-      data: { status: EventStatus.SUCCESS, processedAt: new Date() },
+      data: {
+        status: EventStatus.SUCCESS,
+        processedAt: new Date(),
+        result: result as unknown as Prisma.InputJsonValue,
+      },
     });
-    // 4. FIFO continuation: NOT here (the current job is still active, so an
+    this.logger.log(
+      `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
+        `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — succeeded (reference ${result.reference})`,
+    );
+    // 5. FIFO continuation: NOT here (the current job is still active, so an
     //    `add` with the same jobId would self-suppress). The `completed` event
     //    handler relays the next pending event once the jobId key is freed.
   }

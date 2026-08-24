@@ -33,6 +33,12 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   let prisma: PrismaService;
 
   beforeAll(async () => {
+    // The simulated provider reads these rates at module build; pin a
+    // deterministic success so this pipeline suite never flakes (change
+    // simulated-payroll-processor). Restored in afterAll so a later e2e file
+    // that shares this worker process is unaffected.
+    process.env.PAYROLL_FAILURE_MODE = 'always-success';
+
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -62,6 +68,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   });
 
   afterAll(async () => {
+    delete process.env.PAYROLL_FAILURE_MODE;
     await workerApp?.close();
     await app?.close();
     await prisma.payrollEvent.deleteMany({}).catch(() => undefined);
@@ -100,7 +107,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   };
 
   describe('single event lifecycle', () => {
-    it('drains the event to success with processed_at set', async () => {
+    it('drains the event to success with processed_at and a stored result', async () => {
       const employeeId = employee('pipe');
       const idempotencyKey = key();
       const id = (await submit(employeeId, idempotencyKey)).body.id as string;
@@ -113,6 +120,12 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
       expect(row.status).toBe('SUCCESS');
       expect(row.employeeId).toBe(employeeId);
       expect(row.processedAt).not.toBeNull();
+      // The simulated provider result is persisted alongside the terminal write.
+      const result = row.result as
+        | { reference?: string; employeeId?: string }
+        | null;
+      expect(result?.reference).toMatch(/^SIM-/);
+      expect(result?.employeeId).toBe(employeeId);
     });
   });
 
