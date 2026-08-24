@@ -19,7 +19,7 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 | 8 | `event-status-api` | GET /events (list with filters) + GET /events/:id (detail + attempt/audit history), GET /events/:id/history, appropriate 404 handling | ⬜ Pending |
 | 9 | `minimal-frontend` | React/Vite (or Next.js) demo UI: submit form, event list with live-polling status badges, event detail drawer/page showing processing result and failure info | ⬜ Pending |
 | 10 | `test-suite` | **Jest** + Supertest + @nestjs/testing — unit (mocks), integration (real DB/Redis in Docker), e2e (full HTTP lifecycle via Supertest). Cover all 9 assignment scenarios incl. a worker-recovery test where practical | ⬜ Pending |
-| 11 | `ci-and-docs` | GitHub Actions workflow (lint → test → build → docker build), **Swagger/OpenAPI** via @nestjs/swagger (UI at /api-docs, JSON at /api-docs-json), final README, architecture diagram | ⬜ Pending |
+| 11 | `ci-and-docs` | GitHub Actions workflow (lint → test → build → docker build), final README, architecture diagram — **Swagger/OpenAPI** (UI at /api-docs, JSON at /api-docs-json) was delivered early by change `swagger-openapi` | ⬜ Pending (Swagger portion ✅ shipped by `swagger-openapi`) |
 
 ---
 
@@ -42,6 +42,7 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 - After each `/opsx:apply`, mark the row ✅ Done.
 - The roadmap may be adjusted if implementation reveals new dependencies.
 - Primary evaluation focus: reliability concepts (items 5–7) and test quality (item 10).
+- Swagger/OpenAPI (item 11's API-docs portion) was pulled forward and shipped by change `swagger-openapi`; item 11's remaining scope is CI + final README + architecture diagram.
 
 ---
 

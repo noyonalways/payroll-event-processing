@@ -1,16 +1,11 @@
 import { Controller, Get, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createClient } from 'redis';
+import { HealthResponseDto } from './health-response.dto';
 
-interface HealthResponse {
-  status: 'ok' | 'degraded';
-  db: 'ok' | 'error';
-  redis: 'ok' | 'error';
-  uptime: number;
-  timestamp: string;
-}
-
+@ApiTags('health')
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
@@ -21,7 +16,18 @@ export class HealthController {
   ) {}
 
   @Get()
-  async check(): Promise<HealthResponse> {
+  @ApiOperation({
+    summary: 'Service health check',
+    description:
+      'Returns service and dependency (PostgreSQL, Redis) status. Always HTTP 200; ' +
+      'consumers use the body to determine health.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Service and dependency status',
+    type: HealthResponseDto,
+  })
+  async check(): Promise<HealthResponseDto> {
     const [dbStatus, redisStatus] = await Promise.all([
       this.checkDatabase(),
       this.checkRedis(),
@@ -29,7 +35,7 @@ export class HealthController {
 
     const status = dbStatus === 'ok' && redisStatus === 'ok' ? 'ok' : 'degraded';
 
-    const response: HealthResponse = {
+    const response: HealthResponseDto = {
       status,
       db: dbStatus,
       redis: redisStatus,

@@ -240,7 +240,7 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 | 8 `event-status-api` | GET /events, GET /events/:id/history |
 | 9 `minimal-frontend` | demo UI (submit / live status) |
 | 10 `test-suite` | unit/integration/e2e incl. recovery test |
-| 11 `ci-and-docs` | CI, Swagger, final diagram |
+| 11 `ci-and-docs` | CI, final diagram — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
 
 ## 10. Decisions (closed — implementation-ready)
 

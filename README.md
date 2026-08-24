@@ -72,6 +72,31 @@ Event lifecycle: `received → queued → processing → success | failed` (with
 docker compose up --build   # starts Postgres + Redis + API + worker + frontend
 ```
 
+### API documentation (Swagger/OpenAPI)
+
+The API is self-documenting via Swagger/OpenAPI (`@nestjs/swagger`), available in every environment:
+
+- Swagger UI: http://localhost:3000/api-docs
+- Raw OpenAPI JSON: http://localhost:3000/api-docs-json
+
+The OpenAPI document is generated from the code annotations — there is no hand-maintained spec.
+
+### Prisma CLI & Studio
+
+The app loads its config from `.env.<NODE_ENV>` — NestJS `ConfigModule` picks the right file for the running stage automatically — but the **Prisma CLI** (`prisma studio`, `prisma migrate`, `prisma generate`) loads **only a plain `.env`** and has no `--env-file` flag. To make Studio and migrations work without exporting variables by hand, a gitignored `.env` at the repo root holds the dev `DATABASE_URL`; Prisma auto-loads it:
+
+```bash
+npx prisma studio
+```
+
+> **Why the split?** `.env.*` are gitignored host configs keyed by `NODE_ENV` (see `.env.example`). The `.env` file exists solely so the Prisma CLI can find `DATABASE_URL` — NestJS never reads it. Keep it in sync with `.env.development`.
+
+For a non-dev stage (test/production), inject the URL inline instead:
+
+```powershell
+$env:DATABASE_URL = '<url>'; npx prisma migrate status
+```
+
 See `docs/` for full setup, env vars, DB migrations, and API docs (Swagger/OpenAPI).
 
 ---

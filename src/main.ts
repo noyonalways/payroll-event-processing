@@ -4,6 +4,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { setupSwagger } from './common/swagger/setup-swagger';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -30,6 +31,9 @@ async function bootstrap() {
 
   // CORS for local frontend dev
   app.enableCors();
+
+  // Swagger/OpenAPI docs — served at /api-docs (UI) and /api-docs-json (JSON)
+  setupSwagger(app, port);
 
   await app.listen(port);
 
