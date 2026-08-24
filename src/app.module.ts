@@ -10,6 +10,10 @@ import { EventsModule } from './events/events.module';
     // Global config with env var validation — fails fast on missing required vars
     ConfigModule.forRoot({
       isGlobal: true,
+      // `.env.development` / `.env.test` / `.env.production` hold host-local values.
+      // docker compose injects its own topology overrides for api/worker and does
+      // not rely on this file lookup (its env files are not copied into the image).
+      envFilePath: `.env.${process.env.NODE_ENV ?? 'development'}`,
       validationSchema: Joi.object({
         NODE_ENV: Joi.string()
           .valid('development', 'production', 'test')

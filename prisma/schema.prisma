@@ -10,6 +10,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Models will be added in subsequent changes:
-// - PayrollEvent (event-submission-api)
-// - EventAttempt (retry-and-failure-strategy)
+/// Lifecycle of a payroll event.
+/// received → queued → processing → success | failed
+enum EventStatus {
+  RECEIVED
+  QUEUED
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+/// One submitted payroll event. The DB row is the source of truth for
+/// idempotency (UNIQUE idempotency_key) and per-employee ordering
+/// (UNIQUE (employee_id, sequence)).
+model PayrollEvent {
+  id             String      @id @default(uuid())
+  eventType      String      @map("event_type")
+  employeeId     String      @map("employee_id")
+  payload        Json        @db.JsonB
+  sequence       BigInt
+  idempotencyKey String      @unique @map("idempotency_key")
+  status         EventStatus @default(RECEIVED)
+  responseStatus Int         @default(201) @map("response_status")
+  responseBody   Json        @map("response_body")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  processedAt    DateTime?   @map("processed_at")
+
+  @@unique([employeeId, sequence])
+  @@index([status])
+  @@index([employeeId, createdAt])
+  @@map("payroll_events")
+}

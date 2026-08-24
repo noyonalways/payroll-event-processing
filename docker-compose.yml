@@ -40,7 +40,13 @@ services:
     container_name: payroll_api
     restart: unless-stopped
     env_file:
-      - .env
+      - .env.development
+    environment:
+      # Compose-network topology: containers reach the DB/Redis by service name,
+      # while host runs use the localhost values from .env.development.
+      DATABASE_URL: postgresql://payroll:payroll@postgres:5432/payroll?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
@@ -64,7 +70,11 @@ services:
     container_name: payroll_worker
     restart: unless-stopped
     env_file:
-      - .env
+      - .env.development
+    environment:
+      DATABASE_URL: postgresql://payroll:payroll@postgres:5432/payroll?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       api:
         condition: service_healthy
