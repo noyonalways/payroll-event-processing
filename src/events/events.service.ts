@@ -2,6 +2,7 @@ import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { EventType } from './event-type';
 import { PayloadValidator } from './payload.validator';
 
@@ -25,6 +26,8 @@ export interface SubmissionResult {
  *      writing response_status/response_body in the same transaction (design D2/D3/D5)
  *   4. a UNIQUE(idempotency_key) violation (concurrent duplicate) is caught and
  *      turned into a stored-response read — never an error
+ *   5. post-commit: mark the row `received → queued`, then best-effort enqueue
+ *      (never blocks or fails the 201; the worker's relay recovers failures)
  *
  * The DB unique key — not this code — is the arbiter of idempotency (R2).
  */
@@ -35,6 +38,7 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly payloadValidator: PayloadValidator,
+    private readonly eventQueue: PayrollEventQueueService,
   ) {}
 
   async createEvent(input: CreateEventInput): Promise<SubmissionResult> {
@@ -79,7 +83,7 @@ export class EventsService {
     const id = randomUUID();
 
     try {
-      await this.prisma.$transaction(async (tx) => {
+      const sequence = await this.prisma.$transaction(async (tx) => {
         // Serialize inserts for one employee so MAX(sequence)+1 is race-free (R6).
         // $executeRaw (not $queryRaw): pg_advisory_xact_lock returns Postgres `void`,
         // which Prisma's queryRaw result deserializer cannot map.
@@ -89,7 +93,7 @@ export class EventsService {
           SELECT COALESCE(MAX(sequence), 0) AS max
           FROM "payroll_events"
           WHERE employee_id = ${employeeId}`;
-        const sequence = (rows[0]?.max ?? 0n) + 1n;
+        const next = (rows[0]?.max ?? 0n) + 1n;
 
         await tx.payrollEvent.create({
           data: {
@@ -97,18 +101,31 @@ export class EventsService {
             eventType: input.eventType,
             employeeId,
             payload: input.payload as Prisma.InputJsonValue,
-            sequence,
+            sequence: next,
             idempotencyKey: input.idempotencyKey,
             status: EventStatus.RECEIVED,
             responseStatus: HttpStatus.CREATED,
             responseBody: { id, status: 'received' },
           },
         });
+
+        return next;
       });
 
       this.logger.log(
         `Event ${id} persisted (${input.eventType}, employee ${employeeId})`,
       );
+
+      // Background the queue so the 201 never depends on Redis state. The row is
+      // marked `queued` first (always recoverable), then enqueued best-effort.
+      await this.markQueued(id, employeeId);
+      await this.enqueueBestEffort({
+        id,
+        eventType: input.eventType,
+        employeeId,
+        sequence,
+      });
+
       return { httpStatus: HttpStatus.CREATED, body: { id, status: 'received' } };
     } catch (error) {
       // Concurrent duplicate raced past the pre-check: the unique key rejects,
@@ -124,6 +141,72 @@ export class EventsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Marks the row `received → queued` (guarded, idempotent — a relay may have
+   * already queued it). Failures are logged and never propagated: a submission
+   * that cannot be marked queued still returns 201 and is recovered later.
+   */
+  private async markQueued(id: string, employeeId: string): Promise<void> {
+    try {
+      const { count } = await this.prisma.payrollEvent.updateMany({
+        where: { id, status: EventStatus.RECEIVED },
+        data: { status: EventStatus.QUEUED },
+      });
+      if (count === 0) {
+        this.logger.debug(`Event ${id} already queued — no transition needed`);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to mark event ${id} queued for employee ${employeeId}: ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Best-effort enqueue with a wall-clock guard. If Redis is unreachable,
+   * ioredis's offline queue would otherwise hold the `add` — and thereby the
+   * HTTP response — indefinitely, so the add is raced against a timeout and
+   * treated as a logged, recoverable failure. The event row is authoritative
+   * either way: a timed-out command may still land later, but the worker's
+   * claim guard (queued → processing) makes a duplicate job a harmless no-op.
+   */
+  private async enqueueBestEffort(input: {
+    id: string;
+    eventType: EventType;
+    employeeId: string;
+    sequence: bigint;
+  }): Promise<void> {
+    try {
+      await Promise.race([
+        this.eventQueue.enqueue({
+          eventId: input.id,
+          eventType: input.eventType,
+          employeeId: input.employeeId,
+          sequence: Number(input.sequence),
+        }),
+        this.enqueueTimeout(),
+      ]);
+    } catch (error) {
+      this.logger.error(
+        `Enqueue failed for event ${input.id} (${input.eventType}, employee ${input.employeeId}, seq ${input.sequence}): ${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  private enqueueTimeout(ms = 2000): Promise<never> {
+    return new Promise((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('timed out waiting for Redis')),
+        ms,
+      );
+      timer.unref();
+    });
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private isUniqueViolation(error: unknown): boolean {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule } from './prisma/prisma.module';
+import { QueueModule } from './queue/queue.module';
 import { HealthModule } from './common/health/health.module';
 import { EventsModule } from './events/events.module';
 
@@ -34,6 +35,7 @@ import { EventsModule } from './events/events.module';
       },
     }),
     PrismaModule,
+    QueueModule,
     HealthModule,
     EventsModule,
   ],

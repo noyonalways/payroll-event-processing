@@ -11,8 +11,7 @@ async function bootstrap() {
 
   app.enableShutdownHooks();
 
-  logger.log('Worker process started — waiting for jobs...');
-  logger.log('Queue consumers will be registered in the bullmq-queue-integration change.');
+  logger.log('Worker process started — consuming the payroll-events queue...');
 }
 
 bootstrap();

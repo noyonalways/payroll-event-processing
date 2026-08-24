@@ -1,0 +1,149 @@
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import * as request from 'supertest';
+import { randomUUID } from 'crypto';
+import { AppModule } from '../src/app.module';
+import { WorkerModule } from '../apps/worker/src/worker.module';
+import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
+import { PrismaService } from '../src/prisma/prisma.service';
+
+/**
+ * E2E for the full queue pipeline — REAL Postgres + REAL Redis required
+ * (`docker compose up` brings up both; the existing suites already need
+ * Postgres, this one additionally needs the `redis` service on localhost:6379).
+ *
+ * The API module and the worker module are booted in the same process, so a
+ * submission flows through the real consumer: POST → row `queued` → the
+ * `PayrollEventProcessor` claims (`processing`) → succeeds (`success` +
+ * `processed_at`) → relays the next pending event for the same employee.
+ *
+ * Environment: process.env.DATABASE_URL / REDIS_HOST / REDIS_PORT come from
+ * `.env.test` (loaded by ConfigModule once test/setup-env.ts pins NODE_ENV).
+ *
+ * NOTE: every DB-writing e2e suite clears rows with `deleteMany({})` against the
+ * shared Postgres, so they must NOT run concurrently. `test/jest-e2e.json`
+ * therefore sets `maxWorkers: 1` — running this file in parallel with another
+ * suite deletes their in-flight rows (and vice versa) and produces false failures.
+ */
+jest.setTimeout(30_000);
+
+describe('POST /events → worker queue pipeline (e2e)', () => {
+  let app: INestApplication;
+  let workerApp: INestApplication;
+  let prisma: PrismaService;
+
+  beforeAll(async () => {
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = moduleRef.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
+      }),
+    );
+    app.useGlobalFilters(new HttpExceptionFilter());
+    await app.init();
+    prisma = app.get(PrismaService);
+
+    // Boot the real consumer so the queue is actually drained.
+    const workerModuleRef: TestingModule = await Test.createTestingModule({
+      imports: [WorkerModule],
+    }).compile();
+    workerApp = workerModuleRef.createNestApplication();
+    await workerApp.init();
+  });
+
+  beforeEach(async () => {
+    await prisma.payrollEvent.deleteMany({});
+  });
+
+  afterAll(async () => {
+    await workerApp?.close();
+    await app?.close();
+    await prisma.payrollEvent.deleteMany({}).catch(() => undefined);
+  });
+
+  const http = () => request(app.getHttpServer());
+  const key = () => randomUUID();
+  const employee = (prefix: string) => `${prefix}-${randomUUID()}`;
+
+  const submit = async (employeeId: string, idempotencyKey: string) =>
+    http()
+      .post('/events')
+      .set('Idempotency-Key', idempotencyKey)
+      .send({
+        eventType: 'BANK_ACCOUNT_CHANGE',
+        payload: {
+          employeeId,
+          effectiveDate: '2026-09-01',
+          iban: 'DE89370400440532013000',
+        },
+      })
+      .expect(201);
+
+  /** Polls Postgres until `predicate` returns a truthy value or the deadline hits. */
+  const waitFor = async <T>(
+    predicate: () => Promise<T | null>,
+    { timeout = 15_000, interval = 50 } = {},
+  ): Promise<T> => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const value = await predicate();
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+    throw new Error('Timed out waiting for the worker pipeline');
+  };
+
+  describe('single event lifecycle', () => {
+    it('drains the event to success with processed_at set', async () => {
+      const employeeId = employee('pipe');
+      const idempotencyKey = key();
+      const id = (await submit(employeeId, idempotencyKey)).body.id as string;
+
+      const row = await waitFor(async () => {
+        const found = await prisma.payrollEvent.findUnique({ where: { id } });
+        return found?.status === 'SUCCESS' ? found : null;
+      });
+
+      expect(row.status).toBe('SUCCESS');
+      expect(row.employeeId).toBe(employeeId);
+      expect(row.processedAt).not.toBeNull();
+    });
+  });
+
+  describe('per-employee FIFO burst', () => {
+    it('drains a burst sequentially in sequence order', async () => {
+      const employeeId = employee('burst');
+      const keys = [key(), key(), key()];
+      for (const k of keys) {
+        await submit(employeeId, k);
+      }
+
+      const rows = await waitFor(async () => {
+        const found = await prisma.payrollEvent.findMany({
+          where: { employeeId },
+          orderBy: { sequence: 'asc' },
+        });
+        return found.length === 3 && found.every((r) => r.status === 'SUCCESS')
+          ? found
+          : null;
+      });
+
+      // All three rows landed, right per-employee sequence ordering.
+      expect(rows.map((r) => r.sequence)).toEqual([1n, 2n, 3n]);
+
+      // FIFO: the second event is processed no earlier than the first. Because
+      // `jobId = employeeId` keeps one job in flight, the worker relays them one
+      // at a time, so processed_at is non-decreasing in sequence order.
+      const processedAt = rows.map((r) => r.processedAt?.getTime() ?? -1);
+      for (let i = 1; i < processedAt.length; i++) {
+        expect(processedAt[i]).toBeGreaterThanOrEqual(processedAt[i - 1]);
+      }
+    });
+  });
+});

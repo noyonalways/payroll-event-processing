@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule } from '../../../src/prisma/prisma.module';
+import { QueueModule } from '../../../src/queue/queue.module';
+import { PayrollEventProcessor } from './payroll-event.processor';
 
 @Module({
   imports: [
@@ -26,7 +28,8 @@ import { PrismaModule } from '../../../src/prisma/prisma.module';
       },
     }),
     PrismaModule,
-    // QueueModule will be imported in the bullmq-queue-integration change
+    QueueModule,
   ],
+  providers: [PayrollEventProcessor],
 })
 export class WorkerModule {}
