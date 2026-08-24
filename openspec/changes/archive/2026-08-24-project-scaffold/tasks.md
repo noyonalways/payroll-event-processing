@@ -48,6 +48,6 @@
 
 ## 8. Smoke Test
 
-- [ ] 8.1 Run `docker compose up --build` locally; verify all five containers start without errors
-- [ ] 8.2 Verify `GET http://localhost:3000/health` returns `{ "status": "ok", "db": "ok", "redis": "ok" }`
-- [ ] 8.3 Verify `prisma migrate deploy` runs cleanly against the Docker Postgres instance
+- [x] 8.1 Run `docker compose up --build` locally; verify all five containers start without errors
+- [x] 8.2 Verify `GET http://localhost:3000/health` returns `{ "status": "ok", "db": "ok", "redis": "ok" }`
+- [x] 8.3 Verify `prisma migrate deploy` runs cleanly against the Docker Postgres instance
