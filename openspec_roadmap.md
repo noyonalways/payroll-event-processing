@@ -12,8 +12,8 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 | 1 | `project-scaffold` | NestJS app bootstrap, Docker Compose (Postgres + Redis + API + Worker + Frontend), Prisma setup, health check endpoint, env config, base folder structure | ✅ Done |
 | 2 | `event-submission-api` | POST /events endpoint — per-type DTOs & class-validator, global validation pipe, Prisma schema (`payroll_events` table, idempotency key, sequence, status), initial migration, service layer, 201 response. **Event types: `BANK_ACCOUNT_CHANGE`, `ADDRESS_CHANGE`, `SALARY_CHANGE` (assignment spec — DTOs/validation/handler registry all use exactly these)** | ✅ Done |
 | 3 | `bullmq-queue-integration` | BullMQ module setup, per-employee FIFO (`jobId = employeeId` keeps one job in flight; the `completed`-event relay drains the burst in sequence order), enqueue on event creation (2s best-effort — Redis-down never blocks submission), worker entrypoint in `apps/worker` with guarded `queued→processing→success` transitions and concurrent-safe claim | ✅ Done |
-| 4 | `simulated-payroll-processor` | Handler strategy registry (extensible per event type), simulated external call with random transient/permanent failure, success result storage, structured logging (accepted / started / succeeded / failed) | ⬜ Pending |
-| 5 | `retry-and-failure-strategy` | Separate temporary vs permanent failure; BullMQ retry with exponential backoff for transient errors; `failedReason` + attempt log stored on permanent failure; dead-letter behaviour | ⬜ Pending |
+| 4 | `simulated-payroll-processor` | Handler strategy registry (extensible per event type), simulated external call with random transient/permanent failure, success result storage, structured logging (accepted / started / succeeded / failed) | ✅ Done |
+| 5 | `retry-and-failure-strategy` | Separate temporary vs permanent failure; BullMQ retry with exponential backoff for transient errors; `failedReason` + attempt log stored on permanent failure; dead-letter behaviour | ✅ Done |
 | 6 | `idempotency-layer` | **Required** `Idempotency-Key` header (NOT NULL + UNIQUE in DB — nullable defeats the dedup guarantee), short-circuit duplicate requests with cached/stored response, integration tests — **(core shipped in `event-submission-api`: required header, UNIQUE constraint, stored-response short-circuit; remaining: dedicated integration tests)** | ⬜ Pending |
 | 7 | `concurrency-and-crash-recovery` | Per-employee locking (`SELECT … FOR UPDATE SKIP LOCKED` or advisory lock), status-transition guard (received→queued→processing→success/failed), BullMQ stalled-job detection config, transactional exactly-once write | ⬜ Pending |
 | 8 | `event-status-api` | GET /events (list with filters) + GET /events/:id (detail + attempt/audit history), GET /events/:id/history, appropriate 404 handling | ⬜ Pending |
@@ -48,10 +48,10 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 
 ## Reliability Checklist (spans multiple changes)
 
-- [ ] Temporary vs permanent failure differentiation
+- [x] Temporary vs permanent failure differentiation
 - [ ] Idempotency (no duplicate business effects)
 - [ ] Multiple workers / concurrency safety
 - [ ] Worker crash recovery (stalled jobs)
 - [ ] Processing consistency (exactly-once transactional write)
-- [ ] Per-employee event ordering (parallel across employees)
-- [ ] Extensible handler/strategy pattern for new event types
+- [x] Per-employee event ordering (parallel across employees)
+- [x] Extensible handler/strategy pattern for new event types

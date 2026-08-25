@@ -47,6 +47,9 @@ services:
       DATABASE_URL: postgresql://payroll:payroll@postgres:5432/payroll?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Top-level priority (compose overrides the env_file): idempotency defaults.
+      IDEMPOTENCY_TTL_SECONDS: 86400
+      IDEMPOTENCY_SWEEP_INTERVAL_MS: 60000
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
@@ -75,6 +78,8 @@ services:
       DATABASE_URL: postgresql://payroll:payroll@postgres:5432/payroll?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      IDEMPOTENCY_TTL_SECONDS: 86400
+      IDEMPOTENCY_SWEEP_INTERVAL_MS: 60000
     depends_on:
       api:
         condition: service_healthy

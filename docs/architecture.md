@@ -47,6 +47,7 @@ See the **System Architecture** diagram in eraser.io. In prose:
                  │ PostgreSQL 16       │   │ Redis 7         │
                  │ payroll_events      │   │ BullMQ          │
                  │ event_attempts      │   │ (jobs/retries)  │
+                 │ idempotency_records │   │                 │
                  └──────────▲──────────┘   └──▲──────────────┘
                             │ claimed + written
                  ┌──────────┴──────────────────┴──────────────┐
@@ -67,7 +68,7 @@ See the **System Architecture** diagram in eraser.io. In prose:
 
 | Component | Responsibility | Reliability role |
 |---|---|---|
-| **NestJS API** | DTO validation (class-validator class-transformer), per-type validation rules, idempotency short-circuit, persist + enqueue | Idempotency, fast response |
+| **NestJS API** | DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue | Idempotency, fast response |
 | **Redis / BullMQ** | Job queue keyed per employee (`jobId = employeeId` → FIFO), delayed jobs for backoff, stalled-job detection | Ordering, retries, crash recovery |
 | **Worker** | Claim job, side-effect marker (`processing`), row lock, handler dispatch, provider call, transactional commit | Exactly-once, concurrency, recovery |
 | **PostgreSQL / Prisma** | `payroll_events` + `event_attempts`, unique constraints, status transition guard, `SELECT … FOR UPDATE SKIP LOCKED` | Ground truth, atomicity, dedup |
@@ -112,9 +113,11 @@ Each requirement mapped to its enforcement point.
 
 ### R2 — Idempotency (no duplicate business effects)
 - Client sends a required `Idempotency-Key` header.
-- `idempotency_key` is **`NOT NULL` + `UNIQUE`** on `payroll_events` — the DB is the final arbiter.
-- On duplicate submit: API short-circuits and returns the stored `201` response; a rare race on the unique index is caught as a constraint violation and treated as the same duplicate path.
-- **Enforced in:** API `IdempotencyGuard` + DB unique constraint.
+- A shared NestJS idempotency layer (`src/common/idempotency`, `idempotency_records` table) dedupes under `(scope, key)`; the **`UNIQUE (scope, key)`** constraint on the table is the DB's final arbiter.
+- On a miss, the submit operation and the record insert (`responseStatus`/`responseBody`/`expiresAt`) commit in the **same transaction**; duplicate submits replay the stored response with no new side effects. A rare race on the unique index is caught as a `P2002` constraint violation and treated as the same duplicate path (post-transaction winner read).
+- Records are TTL'd (`IDEMPOTENCY_TTL_SECONDS`, default 86400 s) and swept (`IDEMPOTENCY_SWEEP_INTERVAL_MS`, default 60 s); an expired key is treated as absent — the expired row is deleted inside the transaction before the new insert.
+- `payroll_events.idempotency_key` stays `NOT NULL` (non-unique) purely for traceability.
+- **Enforced in:** `IdempotencyService.execute(scope, key, op)` + `UNIQUE (scope, key)` on `idempotency_records`.
 
 ### R3 — Concurrency safety (multiple workers)
 - Per-employee FIFO: BullMQ `jobId = employeeId` keeps jobs for one employee ordered, while different employees process in parallel.
@@ -144,7 +147,7 @@ Each requirement mapped to its enforcement point.
 
 ## 6. Data model
 
-See the **ERD** in eraser.io. Three tables:
+See the **ERD** in eraser.io. Four tables:
 
 **`payroll_events`** — one row per submitted event.
 
@@ -155,14 +158,26 @@ See the **ERD** in eraser.io. Three tables:
 | `employee_id` | text | group key for ordering |
 | `payload` | JSONB | validated event payload |
 | `sequence` | bigint | per-employee monotonic counter |
-| `idempotency_key` | text | **NOT NULL, UNIQUE** (locked decision) |
+| `idempotency_key` | text | **NOT NULL** — traceability only, non-unique index |
 | `status` | enum | `received` \| `queued` \| `processing` \| `success` \| `failed` |
 | `created_at` / `updated_at` | timestamptz | |
 | `processed_at` | timestamptz nullable | set on success |
-| `response_status` | int | stored HTTP status returned to duplicates — D2 |
-| `response_body` | jsonb | stored `201` body returned to duplicates — D2 |
 
-**Constraints/indexes:** `UNIQUE(idempotency_key)`, `UNIQUE(employee_id, sequence)`, index on `status`, index on `(employee_id, created_at)`.
+**Constraints/indexes:** `UNIQUE(employee_id, sequence)`, index on `status`, index on `(employee_id, created_at)`, index on `idempotency_key`. The dedup response lives in `idempotency_records`, not on this row.
+
+**`idempotency_records`** — store-and-replay dedup state for the shared idempotency layer, keyed by `(scope, key)`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `scope` | text | idempotency partition (e.g. `event-submission`) |
+| `key` | text | client `Idempotency-Key` value |
+| `response_status` | int | stored HTTP status returned to duplicates |
+| `response_body` | jsonb | stored `201` body returned to duplicates |
+| `expires_at` | timestamptz | TTL; swept and reused after expiry |
+| `created_at` | timestamptz | |
+
+**Constraints/indexes:** `UNIQUE (scope, key)` — the dedup arbiter; index on `expires_at` for the sweep (`deleteMany(expires_at < now)`).
 
 **`event_attempts`** — append-only audit trail (one row per processing attempt).
 
@@ -186,7 +201,7 @@ See the **ERD** in eraser.io. Three tables:
 | `started_at` | timestamptz | worker start time |
 | `last_seen_at` | timestamptz | upserted every 5 s |
 
-**Note:** `idempotency_key` is `NOT NULL` + `UNIQUE` (D1) — the ERD in eraser.io is updated to match.
+**Note:** `idempotency_key` is `NOT NULL` + non-unique index (D1), and dedup state lives in `idempotency_records` — the ERD in eraser.io is updated to match.
 
 ## 7. Sequence flows
 
@@ -195,11 +210,11 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 ### 7.1 Event submission (idempotent, non-blocking)
 
 1. `Client → POST /events` with `Idempotency-Key` + typed payload.
-2. API validates DTO → `400` on invalid; missing key → `400`.
-3. API looks up `idempotency_key`; **if found → return stored `201`** (no new side effects).
-4. If new: transactional insert `payroll_events(status=received)` + compute `sequence` (unique violation on race → duplicate path → return stored `201`).
+2. API validates DTO → `400` on invalid; missing/blank key → `400` (`@IdempotencyKey()`).
+3. `IdempotencyService.execute('event-submission', key, op)` — fast-path `findUnique`; **record found & unexpired → return stored response** (no new side effects).
+4. On miss, one transaction: delete any still-expired `(scope, key)` row, take the per-employee advisory lock, compute next `sequence`, insert `payroll_events(status=received)` **and** the `idempotency_records` row together (a `P2002` race on the unique key → post-transaction winner read → duplicate path → stored response).
 5. Enqueue BullMQ job (`jobId = employeeId`), mark `queued`.
-6. Return `201 { id, status: 'queued' }`. HTTP returns within milliseconds; provider work happens later.
+6. Return `201 { id, status: 'received' }`. HTTP returns within milliseconds; provider work happens later.
 
 ### 7.2 Worker processing (exactly-once, retry, recovery)
 
@@ -246,12 +261,12 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 
 All previously open items are now settled with concrete values.
 
-### D1 — `idempotency_key`: `NOT NULL` + `UNIQUE` (confirmed)
-Required `Idempotency-Key` header; `UNIQUE(idempotency_key)` on `payroll_events`. A nullable key cannot guarantee dedup. No further action.
+### D1 — `idempotency_key`: `NOT NULL` + non-unique index (confirmed, revised in `idempotency-layer`)
+Required `Idempotency-Key` header; dedup is enforced by `UNIQUE (scope, key)` on the dedicated `idempotency_records` table; `payroll_events.idempotency_key` stays `NOT NULL` (indexed) purely for traceability. A nullable key cannot guarantee dedup.
 
-### D2 — Stored response on dedupe: persist it on the DB row (no Redis cache)
-Add `response_status` (int) + `response_body` (jsonb), `NOT NULL`, written in the **same insert transaction**. A duplicate submit reads the row and returns exactly the stored response.
-**Why:** the DB is already the dedup arbiter via the unique key, so correctness never depends on a TTL'd cache; a Redis cache would only add eviction + coherence failure modes. An optional Redis warm-path cache can be added later purely for latency, with the DB as source of truth.
+### D2 — Stored response on dedupe: dedicated `idempotency_records` table, TTL'd + swept (no Redis cache)
+The shared idempotency layer keeps one row per `(scope, key)` holding `response_status` + `response_body`, written in the **same insert transaction** as the business row. Duplicate/key-reuse submits read that row and return exactly the stored response; records expire (`IDEMPOTENCY_TTL_SECONDS`) and are swept (`IDEMPOTENCY_SWEEP_INTERVAL_MS`), and an expired key becomes reusable.
+**Why:** the DB is already the dedup arbiter via `UNIQUE (scope, key)`, so correctness never depends on a TTL'd cache; a Redis cache would only add eviction + coherence failure modes. The separate table keeps the dedup state independent of the business row and is generic across scopes. This supercedes the earlier design that stored the response on the `payroll_events` row (columns removed in the `idempotency_records` migration).
 
 ### D3 — Retry bounds: `maxAttempts = 5`, exponential backoff 1 s base + 50 % jitter, all env-config
 BullMQ: `attempts: 5` (1 initial + 4 retries), `backoff: { type: 'exponential', delay: 1000, jitter: 0.5 }` → delays ≈ 1/2/4/8 s with ±50 % jitter.

@@ -4,6 +4,7 @@ import * as request from 'supertest';
 import { randomUUID } from 'crypto';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
+import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../src/common/idempotency/idempotency.constants';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 /**
@@ -40,9 +41,11 @@ describe('POST /events (e2e)', () => {
 
   beforeEach(async () => {
     await prisma.payrollEvent.deleteMany({});
+    await prisma.idempotencyRecord.deleteMany({});
   });
 
   afterAll(async () => {
+    await prisma.idempotencyRecord.deleteMany({}).catch(() => undefined);
     await prisma.payrollEvent.deleteMany({}).catch(() => undefined);
     await app.close();
   });
@@ -164,6 +167,45 @@ describe('POST /events (e2e)', () => {
       expect(second.body).toEqual(first.body);
       expect(
         await prisma.payrollEvent.count({ where: { idempotencyKey: immutable } }),
+      ).toBe(1);
+    });
+
+    it('allows key reuse after expiry: creates a new event and replaces the stored response', async () => {
+      const reusable = key();
+      const body = bankAccount();
+
+      const first = await http()
+        .post('/events')
+        .set('Idempotency-Key', reusable)
+        .send(body)
+        .expect(201);
+
+      // Force expiry at the record level. A small IDEMPOTENCY_TTL_SECONDS override
+      // can't steer one test: @nestjs/config snapshots process.env at import time,
+      // and this direct update is deterministic and scoped to this key.
+      const forced = await prisma.idempotencyRecord.update({
+        where: {
+          scope_key: { scope: IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, key: reusable },
+        },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+      expect(forced.expiresAt.getTime()).toBeLessThan(Date.now()); // setup applied
+
+      const second = await http()
+        .post('/events')
+        .set('Idempotency-Key', reusable)
+        .send(body)
+        .expect(201);
+
+      // Expired → treated as absent → a fresh event row and a fresh id.
+      expect(second.body.id).not.toBe(first.body.id);
+      expect(second.body).toEqual({ id: second.body.id, status: 'received' });
+      expect(
+        await prisma.payrollEvent.count({ where: { idempotencyKey: reusable } }),
+      ).toBe(2);
+      // The (scope, key) record was replaced, not duplicated.
+      expect(
+        await prisma.idempotencyRecord.count({ where: { key: reusable } }),
       ).toBe(1);
     });
 

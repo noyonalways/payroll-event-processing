@@ -33,6 +33,8 @@ import { EventsModule } from './events/events.module';
           .default('random'),
         PAYROLL_MAX_RETRY_ATTEMPTS: Joi.number().integer().min(1).default(5),
         PAYROLL_RETRY_BASE_DELAY_MS: Joi.number().integer().min(0).default(1000),
+        IDEMPOTENCY_TTL_SECONDS: Joi.number().integer().min(1).default(86400),
+        IDEMPOTENCY_SWEEP_INTERVAL_MS: Joi.number().integer().min(1000).default(60000),
       }),
       validationOptions: {
         allowUnknown: true,

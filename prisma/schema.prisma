@@ -20,19 +20,18 @@ enum EventStatus {
   FAILED
 }
 
-/// One submitted payroll event. The DB row is the source of truth for
-/// idempotency (UNIQUE idempotency_key) and per-employee ordering
-/// (UNIQUE (employee_id, sequence)).
+/// One submitted payroll event. Per-employee ordering is enforced by
+/// UNIQUE (employee_id, sequence); idempotency is enforced by the shared
+/// idempotency_records store (UNIQUE (scope, key)), NOT by this table.
+/// idempotency_key is retained as a non-unique index for traceability only.
 model PayrollEvent {
   id             String      @id @default(uuid())
   eventType      String      @map("event_type")
   employeeId     String      @map("employee_id")
   payload        Json        @db.JsonB
   sequence       BigInt
-  idempotencyKey String      @unique @map("idempotency_key")
+  idempotencyKey String      @map("idempotency_key")
   status         EventStatus @default(RECEIVED)
-  responseStatus Int         @default(201) @map("response_status")
-  responseBody   Json        @map("response_body")
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")
   processedAt    DateTime?   @map("processed_at")
@@ -40,7 +39,25 @@ model PayrollEvent {
   result         Json?       @map("result")
 
   @@unique([employeeId, sequence])
+  @@index([idempotencyKey])
   @@index([status])
   @@index([employeeId, createdAt])
   @@map("payroll_events")
+}
+
+/// Shared idempotency store: one record per (scope, key) carrying the stored
+/// HTTP response, with TTL expiry. The UNIQUE (scope, key) constraint is the
+/// arbiter of idempotency for any endpoint that adopts the layer.
+model IdempotencyRecord {
+  id             String   @id @default(uuid())
+  scope          String   @map("scope")
+  key            String   @map("key")
+  responseStatus Int      @map("response_status")
+  responseBody   Json     @map("response_body")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
 }

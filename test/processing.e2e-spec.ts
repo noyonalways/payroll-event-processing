@@ -69,7 +69,10 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
   /** Polls Postgres until `predicate` returns a truthy value or the deadline hits. */
   const waitFor = async <T>(
     predicate: () => Promise<T | null>,
-    { timeout = 15_000, interval = 50 } = {},
+    // 25 s: the default retry cadence (5 attempts, exponential backoff, 1 s base)
+    // takes ~16 s from submission for the row to reach `failed`; a 15 s wall
+    // races it and flakes.
+    { timeout = 25_000, interval = 50 } = {},
   ): Promise<T> => {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {

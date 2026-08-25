@@ -1,10 +1,11 @@
 import { HttpStatus } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Prisma } from '@prisma/client';
 import { EventsService, CreateEventInput } from './events.service';
 import { PayloadValidator } from './payload.validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
+import { IdempotencyService } from '../common/idempotency/idempotency.service';
+import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';
 import { EventType } from './event-type';
 
 describe('EventsService', () => {
@@ -16,10 +17,10 @@ describe('EventsService', () => {
     payrollEvent: { create: jest.fn() },
   };
   const prisma = {
-    payrollEvent: { findUnique: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
-    $transaction: jest.fn(async (callback: (t: typeof tx) => Promise<unknown>) => callback(tx)),
+    payrollEvent: { updateMany: jest.fn() },
   };
   const eventQueue = { enqueue: jest.fn() };
+  const idempotency = { execute: jest.fn() };
 
   const input = (overrides: Partial<CreateEventInput> = {}): CreateEventInput => ({
     eventType: EventType.BANK_ACCOUNT_CHANGE,
@@ -32,6 +33,13 @@ describe('EventsService', () => {
     ...overrides,
   });
 
+  // Faithful fresh-submission path: the layer runs the op against the tx.
+  const freshPath = () => {
+    idempotency.execute.mockImplementation(async (_scope: string, _key: string, op: (t: typeof tx) => unknown) =>
+      op(tx),
+    );
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -41,6 +49,7 @@ describe('EventsService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PayloadValidator, useValue: { validate: jest.fn().mockResolvedValue(undefined) } },
         { provide: PayrollEventQueueService, useValue: eventQueue },
+        { provide: IdempotencyService, useValue: idempotency },
       ],
     }).compile();
 
@@ -49,14 +58,14 @@ describe('EventsService', () => {
     tx.$executeRaw.mockReset();
     tx.payrollEvent.create.mockReset();
     prisma.payrollEvent.updateMany.mockReset();
+    prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
     eventQueue.enqueue.mockReset();
     eventQueue.enqueue.mockResolvedValue(undefined);
-    prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
   });
 
   describe('new event submission', () => {
-    it('inserts once and returns 201 { id, status: "received" }', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue(null);
+    it('puts the insert op under the event-submission scope and returns 201', async () => {
+      freshPath();
       tx.$executeRaw.mockResolvedValue(1); // advisory lock
       tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
       tx.payrollEvent.create.mockResolvedValue({ id: 'evt-new' });
@@ -64,60 +73,48 @@ describe('EventsService', () => {
       const result = await service.createEvent(input());
 
       expect(result).toEqual({ httpStatus: 201, body: { id: expect.any(String), status: 'received' } });
+      expect(idempotency.execute).toHaveBeenCalledWith(
+        IDEMPOTENCY_SCOPE_EVENT_SUBMISSION,
+        'k-1',
+        expect.any(Function),
+      );
       expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1);
-      expect(prisma.payrollEvent.create).not.toHaveBeenCalled();
+    });
+
+    it('inserts the event row without response columns (persistence moved to the idempotency record)', async () => {
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+
+      await service.createEvent(input());
 
       const data = tx.payrollEvent.create.mock.calls[0][0].data;
       expect(data.sequence).toBe(1n);
       expect(data.idempotencyKey).toBe('k-1');
       expect(data.status).toBe('RECEIVED');
-      expect(data.responseStatus).toBe(HttpStatus.CREATED);
-      expect(data.responseBody).toEqual({ id: data.id, status: 'received' });
+      expect(data).not.toHaveProperty('responseStatus');
+      expect(data).not.toHaveProperty('responseBody');
     });
   });
 
-  describe('idempotency (dedupe by idempotency_key)', () => {
-    it('returns the stored response for a known key without inserting', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue({
-        responseStatus: 201,
-        responseBody: { id: 'evt-1', status: 'received' },
+  describe('replay / race (handled by the idempotency layer)', () => {
+    it('returns the stored response for a known key without running the op', async () => {
+      // A stored replay carries only { status, body } — no eventId.
+      idempotency.execute.mockResolvedValue({
+        status: HttpStatus.CREATED,
+        body: { id: 'evt-1', status: 'received' },
       });
 
       const result = await service.createEvent(input());
 
       expect(result).toEqual({ httpStatus: 201, body: { id: 'evt-1', status: 'received' } });
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('returns the stored response when the insert hits a unique violation (P2002 race)', async () => {
-      prisma.payrollEvent.findUnique
-        .mockResolvedValueOnce(null) // pre-check misses
-        .mockResolvedValueOnce({
-          responseStatus: 201,
-          responseBody: { id: 'evt-2', status: 'received' },
-        }); // re-read after the race
-      // Faithful simulation: the transaction runs normally, but the create
-      // violates UNIQUE(idempotency_key) and the whole transaction aborts.
-      tx.$executeRaw.mockResolvedValue(1);
-      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
-      tx.payrollEvent.create.mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-          code: 'P2002',
-          clientVersion: '6.19.3',
-        }),
-      );
-
-      const result = await service.createEvent(input());
-
-      expect(result.body).toEqual({ id: 'evt-2', status: 'received' });
-      expect(prisma.payrollEvent.findUnique).toHaveBeenCalledTimes(2);
-      expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1); // only the failed attempt
+      expect(tx.payrollEvent.create).not.toHaveBeenCalled();
     });
   });
 
   describe('per-employee sequence', () => {
     it('computes MAX(sequence)+1 inside the insert transaction', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue(null);
+      freshPath();
       tx.$executeRaw.mockResolvedValue(1);
       tx.$queryRaw.mockResolvedValueOnce([{ max: 4n }]);
 
@@ -130,7 +127,7 @@ describe('EventsService', () => {
 
   describe('enqueue on submit (reliability-critical)', () => {
     const persistedNewEvent = () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue(null);
+      freshPath();
       tx.$executeRaw.mockResolvedValue(1); // advisory lock
       tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
       tx.payrollEvent.create.mockResolvedValue({ id: 'evt-q' });
@@ -154,7 +151,7 @@ describe('EventsService', () => {
       });
     });
 
-    it("still returns 201 and persists when the queue is unreachable (enqueue rejects)", async () => {
+    it('still returns 201 and persists when the queue is unreachable (enqueue rejects)', async () => {
       persistedNewEvent();
       eventQueue.enqueue.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:6379'));
 
@@ -170,33 +167,24 @@ describe('EventsService', () => {
     });
 
     it('does not enqueue (and does not mark queued) for a duplicate Idempotency-Key', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue({
-        responseStatus: 201,
-        responseBody: { id: 'evt-1', status: 'received' },
+      idempotency.execute.mockResolvedValue({
+        status: HttpStatus.CREATED,
+        body: { id: 'evt-1', status: 'received' },
       });
 
       await service.createEvent(input());
 
       expect(eventQueue.enqueue).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(tx.payrollEvent.create).not.toHaveBeenCalled();
     });
 
-    it('does not enqueue when the insert hits the unique-violation race', async () => {
-      prisma.payrollEvent.findUnique
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          responseStatus: 201,
-          responseBody: { id: 'evt-2', status: 'received' },
-        });
-      tx.$executeRaw.mockResolvedValue(1);
-      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
-      tx.payrollEvent.create.mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-          code: 'P2002',
-          clientVersion: '6.19.3',
-        }),
-      );
+    it('does not enqueue when the layer resolves a race as the winner stored response', async () => {
+      // P2002 race → the layer reads the winner and returns its stored response.
+      idempotency.execute.mockResolvedValue({
+        status: HttpStatus.CREATED,
+        body: { id: 'evt-2', status: 'received' },
+      });
 
       const result = await service.createEvent(input());
 

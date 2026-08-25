@@ -3,6 +3,8 @@ import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
+import { IdempotencyService } from '../common/idempotency/idempotency.service';
+import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';
 import { EventType } from './event-type';
 import { PayloadValidator } from './payload.validator';
 
@@ -13,23 +15,36 @@ export interface CreateEventInput {
 }
 
 export interface SubmissionResult {
-  httpStatus: HttpStatus;
+  httpStatus: number;
   body: Record<string, unknown>;
+}
+
+/**
+ * Shape returned by a *fresh* submission's op. Replays/races return only the
+ * stored { status, body } — no eventId — so post-commit work is skipped for them.
+ */
+interface FreshSubmission {
+  eventId: string;
+  status: number;
+  body: Record<string, unknown>;
+  sequence: bigint;
 }
 
 /**
  * Submits payroll events with exactly-once semantics:
  *
  *   1. validate payload per eventType (400 on failure)
- *   2. fast-path dedupe on idempotency_key (returns stored response, no side effects)
- *   3. transactional insert: per-employee advisory lock → next sequence → insert,
- *      writing response_status/response_body in the same transaction (design D2/D3/D5)
- *   4. a UNIQUE(idempotency_key) violation (concurrent duplicate) is caught and
- *      turned into a stored-response read — never an error
- *   5. post-commit: mark the row `received → queued`, then best-effort enqueue
- *      (never blocks or fails the 201; the worker's relay recovers failures)
+ *   2. delegate dedupe + transactional insert to the shared idempotency layer
+ *      (`IdempotencyService.execute` under scope `event-submission`): a keyed
+ *      replay serves the stored response with no side effects; a miss runs the
+ *      insert inside the layer's transaction alongside the idempotency record;
+ *      a UNIQUE(scope, key) race is returned as the winner's stored response
+ *   3. post-commit (fresh submissions only): mark the row `received → queued`,
+ *      then best-effort enqueue (never blocks or fails the 201; the worker's
+ *      relay recovers failures)
  *
- * The DB unique key — not this code — is the arbiter of idempotency (R2).
+ * The DB unique key on idempotency_records — not this code — is the arbiter of
+ * idempotency (R2).
  */
 @Injectable()
 export class EventsService {
@@ -39,6 +54,7 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly payloadValidator: PayloadValidator,
     private readonly eventQueue: PayrollEventQueueService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   async createEvent(input: CreateEventInput): Promise<SubmissionResult> {
@@ -51,96 +67,76 @@ export class EventsService {
       `Submitting ${input.eventType} for employee ${employeeId} (key ${input.idempotencyKey})`,
     );
 
-    // Fast-path: a prior submission for this key already exists.
-    const existing = await this.readStoredResponse(input.idempotencyKey);
-    if (existing) {
-      return existing;
-    }
+    // The layer dedupes under scope 'event-submission' and persists the stored
+    // response in the same transaction as the event row (exactly-once). A replay
+    // or race returns only { status, body } — no eventId — so the enqueue path
+    // below is skipped for those.
+    const submitted = await this.idempotency.execute(
+      IDEMPOTENCY_SCOPE_EVENT_SUBMISSION,
+      input.idempotencyKey,
+      (tx) => this.insertEvent(tx, input, employeeId),
+    );
 
-    return this.insertEvent(input, employeeId);
-  }
-
-  private async readStoredResponse(
-    idempotencyKey: string,
-  ): Promise<SubmissionResult | null> {
-    const row = await this.prisma.payrollEvent.findUnique({
-      where: { idempotencyKey },
-      select: { responseStatus: true, responseBody: true },
-    });
-    if (!row) {
-      return null;
-    }
-    return {
-      httpStatus: row.responseStatus,
-      body: row.responseBody as Record<string, unknown>,
-    };
-  }
-
-  private async insertEvent(
-    input: CreateEventInput,
-    employeeId: string,
-  ): Promise<SubmissionResult> {
-    const id = randomUUID();
-
-    try {
-      const sequence = await this.prisma.$transaction(async (tx) => {
-        // Serialize inserts for one employee so MAX(sequence)+1 is race-free (R6).
-        // $executeRaw (not $queryRaw): pg_advisory_xact_lock returns Postgres `void`,
-        // which Prisma's queryRaw result deserializer cannot map.
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employeeId}))`;
-
-        const rows = await tx.$queryRaw<Array<{ max: bigint | null }>>`
-          SELECT COALESCE(MAX(sequence), 0) AS max
-          FROM "payroll_events"
-          WHERE employee_id = ${employeeId}`;
-        const next = (rows[0]?.max ?? 0n) + 1n;
-
-        await tx.payrollEvent.create({
-          data: {
-            id,
-            eventType: input.eventType,
-            employeeId,
-            payload: input.payload as Prisma.InputJsonValue,
-            sequence: next,
-            idempotencyKey: input.idempotencyKey,
-            status: EventStatus.RECEIVED,
-            responseStatus: HttpStatus.CREATED,
-            responseBody: { id, status: 'received' },
-          },
-        });
-
-        return next;
-      });
-
+    if (submitted.eventId) {
       this.logger.log(
-        `Event ${id} persisted (${input.eventType}, employee ${employeeId})`,
+        `Event ${submitted.eventId} persisted (${input.eventType}, employee ${employeeId})`,
       );
 
       // Background the queue so the 201 never depends on Redis state. The row is
       // marked `queued` first (always recoverable), then enqueued best-effort.
-      await this.markQueued(id, employeeId);
+      await this.markQueued(submitted.eventId, employeeId);
       await this.enqueueBestEffort({
+        id: submitted.eventId,
+        eventType: input.eventType,
+        employeeId,
+        sequence: submitted.sequence,
+      });
+    }
+
+    return { httpStatus: submitted.status, body: submitted.body };
+  }
+
+  /**
+   * op — runs inside the idempotency layer's transaction. Per-employee advisory
+   * lock → MAX(sequence)+1 → insert. The stored response is persisted by the
+   * layer in the same commit; no response columns live on the event row anymore.
+   */
+  private async insertEvent(
+    tx: Prisma.TransactionClient,
+    input: CreateEventInput,
+    employeeId: string,
+  ): Promise<FreshSubmission> {
+    const id = randomUUID();
+
+    // Serialize inserts for one employee so MAX(sequence)+1 is race-free (R6).
+    // $executeRaw (not $queryRaw): pg_advisory_xact_lock returns Postgres `void`,
+    // which Prisma's queryRaw result deserializer cannot map.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employeeId}))`;
+
+    const rows = await tx.$queryRaw<Array<{ max: bigint | null }>>`
+      SELECT COALESCE(MAX(sequence), 0) AS max
+      FROM "payroll_events"
+      WHERE employee_id = ${employeeId}`;
+    const next = (rows[0]?.max ?? 0n) + 1n;
+
+    await tx.payrollEvent.create({
+      data: {
         id,
         eventType: input.eventType,
         employeeId,
-        sequence,
-      });
+        payload: input.payload as Prisma.InputJsonValue,
+        sequence: next,
+        idempotencyKey: input.idempotencyKey,
+        status: EventStatus.RECEIVED,
+      },
+    });
 
-      return { httpStatus: HttpStatus.CREATED, body: { id, status: 'received' } };
-    } catch (error) {
-      // Concurrent duplicate raced past the pre-check: the unique key rejects,
-      // the winning row commits, and we return ITS stored response (no second row).
-      if (this.isUniqueViolation(error)) {
-        this.logger.debug(
-          `Unique violation on key ${input.idempotencyKey} — returning stored response`,
-        );
-        const stored = await this.readStoredResponse(input.idempotencyKey);
-        if (stored) {
-          return stored;
-        }
-      }
-      throw error;
-    }
+    return {
+      eventId: id,
+      status: HttpStatus.CREATED,
+      body: { id, status: 'received' },
+      sequence: next,
+    };
   }
 
   /**
@@ -207,11 +203,5 @@ export class EventsService {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
-  }
-
-  private isUniqueViolation(error: unknown): boolean {
-    return (
-      error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
-    );
   }
 }
