@@ -25,6 +25,8 @@ import { PayrollEventProcessor } from './payroll-event.processor';
         PAYROLL_FAILURE_MODE: Joi.string()
           .valid('random', 'always-success', 'always-transient', 'always-permanent')
           .default('random'),
+        PAYROLL_MAX_RETRY_ATTEMPTS: Joi.number().integer().min(1).default(5),
+        PAYROLL_RETRY_BASE_DELAY_MS: Joi.number().integer().min(0).default(1000),
       }),
       validationOptions: {
         allowUnknown: true,

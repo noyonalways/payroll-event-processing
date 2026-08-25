@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EventStatus, Prisma } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import {
   PayrollEventQueueService,
@@ -14,6 +15,7 @@ import {
 import { HandlerRegistry } from '../../../src/processing/handler-registry';
 import { ProcessingResult } from '../../../src/processing/processing.types';
 import { EventType } from '../../../src/events/event-type';
+import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
 
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
@@ -52,13 +54,16 @@ import { EventType } from '../../../src/events/event-type';
 export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy {
   private readonly logger = new Logger(PayrollEventProcessor.name);
   private readonly workerPid = process.pid;
+  private readonly maxRetryAttempts: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueService: PayrollEventQueueService,
     private readonly registry: HandlerRegistry,
+    private readonly config: ConfigService,
   ) {
     super();
+    this.maxRetryAttempts = this.config.get<number>('PAYROLL_MAX_RETRY_ATTEMPTS', 5);
   }
 
   /**
@@ -84,6 +89,38 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       return;
     }
     await this.relayNextPending(job.data.employeeId, job.data.eventId);
+  }
+
+  /**
+   * Fires when BullMQ marks a job as failed (after every failed attempt,
+   * including mid-retry ones). Only acts when all attempts are exhausted
+   * (D4): writes the event row to `failed` to sync DB state with BullMQ.
+   *
+   * Mid-retry calls (attemptsMade < maxAttempts) are pure no-ops — the
+   * row was already reset to `queued` in `process()` before re-throwing.
+   */
+  @OnWorkerEvent('failed')
+  async onFailed(job: Job<PayrollEventJobInput>, error: Error): Promise<void> {
+    if (job.name !== PAYROLL_EVENT_JOB) {
+      return;
+    }
+
+    const maxAttempts = job.opts?.attempts ?? this.maxRetryAttempts;
+    if (job.attemptsMade < maxAttempts) {
+      // Mid-retry: the row is already in `queued` (reset in process()). No-op.
+      return;
+    }
+
+    // All attempts exhausted — write terminal `failed` (R1, D4).
+    const { eventId, employeeId, eventType, sequence } = job.data;
+    await this.prisma.payrollEvent.updateMany({
+      where: { id: eventId, status: EventStatus.QUEUED },
+      data: { status: EventStatus.FAILED },
+    });
+    this.logger.error(
+      `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
+        `(seq ${sequence}, attempts exhausted after ${job.attemptsMade}, worker ${this.workerPid}) — exhausted: ${error.message}`,
+    );
   }
 
   async process(job: Job<PayrollEventJobInput>): Promise<void> {
@@ -141,16 +178,30 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
         attempt,
       });
     } catch (error) {
-      // Simulated provider failure → terminal `failed` (guarded). The transient
-      // vs permanent retry/dead-letter handling lands in #5; here both classes
-      // mark the row failed and the job is NOT re-enqueued.
+      if (error instanceof TransientPayrollFailureError) {
+        // Transient failure (R1, D1): reset the row so the claim guard succeeds
+        // on BullMQ's next attempt (D2), then re-throw so BullMQ schedules
+        // the retry with exponential backoff (D3). Do NOT write `failed` here.
+        await this.prisma.payrollEvent.updateMany({
+          where: { id: eventId, status: EventStatus.PROCESSING },
+          data: { status: EventStatus.QUEUED },
+        });
+        this.logger.warn(
+          `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
+            `(seq ${sequence}, attempt ${attempt}/${this.maxRetryAttempts}, worker ${this.workerPid}) — retrying: ${this.errorMessage(error)}`,
+        );
+        throw error; // signals BullMQ to schedule the next attempt
+      }
+
+      // Permanent or unknown failure (R1, D1): write terminal `failed` and
+      // return normally — do NOT re-throw (no further BullMQ attempts).
       await this.prisma.payrollEvent.updateMany({
         where: { id: eventId, status: EventStatus.PROCESSING },
         data: { status: EventStatus.FAILED },
       });
-      this.logger.log(
+      this.logger.error(
         `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
-          `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — failed: ${this.errorMessage(error)}`,
+          `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — permanent-failure: ${this.errorMessage(error)}`,
       );
       return;
     }
