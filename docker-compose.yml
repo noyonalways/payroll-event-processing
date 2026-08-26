@@ -91,16 +91,21 @@ services:
       api:
         condition: service_healthy
 
-  # ─── Frontend (placeholder) ─────────────────────────────────────────────────
+  # ─── Frontend ───────────────────────────────────────────────────────────────
   frontend:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        # Bake-time API origin; default matches dev mode (host runs on :3000).
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     container_name: payroll_frontend
     restart: unless-stopped
     ports:
       - "5173:80"
-    volumes:
-      - ./docker/nginx-placeholder.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./docker/placeholder-index.html:/usr/share/nginx/html/index.html:ro
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:
