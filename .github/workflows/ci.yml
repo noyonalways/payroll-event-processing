@@ -10,8 +10,10 @@
 #              worker racing the in-process consumer (the local known race).
 #
 # All checks must pass before anything merges (configure branch protection to
-# require all three). Running the same commands a reviewer would run locally:
-# the Dockerfiles ship node:20-alpine, so CI pins Node 20.
+# require all three). Node alignment: the backend + e2e jobs pin Node 20 to
+# match the node:20-alpine API/worker Docker images, and the frontend job uses
+# Node 22 — its jsdom-based Vitest suite cannot boot under Node 20
+# (undici webidl API absent), and Vite 8 / TypeScript 6 target modern Node.
 name: CI
 
 on:
@@ -31,10 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -62,12 +64,12 @@ jobs:
         working-directory: frontend
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -111,10 +113,10 @@ jobs:
           --health-retries 10
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
