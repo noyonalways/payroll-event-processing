@@ -61,3 +61,52 @@ model IdempotencyRecord {
   @@index([expiresAt])
   @@map("idempotency_records")
 }
+
+/// Terminal outcome of one processing attempt (append-only audit trail).
+enum AttemptStatus {
+  SUCCESS
+  FAILED
+}
+
+/// Why a failed attempt failed. TEMPORARY = retries exhausted after transient
+/// failures; PERMANENT = business rejection that retrying would not fix.
+enum AttemptErrorType {
+  TEMPORARY
+  PERMANENT
+}
+
+/// Append-only audit trail of processing attempts that committed a terminal
+/// outcome (success | failed). Each row is inserted in the SAME database
+/// transaction as the `payroll_events` terminal transition (design D2): a
+/// SUCCESS row alongside `processing → success`, a FAILED(PERMANENT) row
+/// alongside `processing → failed`, and a FAILED(TEMPORARY) row on retry
+/// exhaustion. Transient attempts that are retried are NOT recorded here —
+/// they roll back with the aborted transaction and remain observable through
+/// the structured `retrying` log lines. Rows are never updated or deleted.
+model EventAttempt {
+  id            String             @id @default(uuid())
+  eventId       String             @map("event_id")
+  attemptNumber Int                @map("attempt_number")
+  status        AttemptStatus
+  errorType     AttemptErrorType?  @map("error_type")
+  failedReason  String?            @map("failed_reason")
+  result        Json?
+  createdAt     DateTime           @default(now()) @map("created_at")
+
+  @@index([eventId])
+  @@map("event_attempts")
+}
+
+/// One row per running worker process, upserted on a heartbeat cadence
+/// (`WORKER_HEARTBEAT_INTERVAL_MS`). Backs the `/health` worker-liveness
+/// check: a worker whose `lastSeenAt` is older than `HEALTH_WORKER_STALE_MS`
+/// is reported stale and degrades the endpoint. worker_id = `WORKER_ID` env
+/// or `${hostname}:${pid}`.
+model WorkerHeartbeat {
+  workerId   String   @id @map("worker_id")
+  hostname   String
+  startedAt  DateTime @map("started_at")
+  lastSeenAt DateTime @map("last_seen_at")
+
+  @@map("worker_heartbeats")
+}

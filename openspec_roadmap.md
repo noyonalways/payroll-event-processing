@@ -15,7 +15,7 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 | 4 | `simulated-payroll-processor` | Handler strategy registry (extensible per event type), simulated external call with random transient/permanent failure, success result storage, structured logging (accepted / started / succeeded / failed) | ✅ Done |
 | 5 | `retry-and-failure-strategy` | Separate temporary vs permanent failure; BullMQ retry with exponential backoff for transient errors; `failedReason` + attempt log stored on permanent failure; dead-letter behaviour | ✅ Done |
 | 6 | `idempotency-layer` | **Required** `Idempotency-Key` header (NOT NULL + UNIQUE in DB — nullable defeats the dedup guarantee), short-circuit duplicate requests with cached/stored response, integration tests — **(core shipped in `event-submission-api`: required header, UNIQUE constraint, stored-response short-circuit; remaining: dedicated integration tests)** | ⬜ Pending |
-| 7 | `concurrency-and-crash-recovery` | Per-employee locking (`SELECT … FOR UPDATE SKIP LOCKED` or advisory lock), status-transition guard (received→queued→processing→success/failed), BullMQ stalled-job detection config, transactional exactly-once write | ⬜ Pending |
+| 7 | `concurrency-and-crash-recovery` | Transactional row-locked processing (`SELECT … FOR UPDATE` + guarded `queued→processing` claim in ONE interactive tx that commits terminal `success`/`failed` together with the `event_attempts` audit row); transient failures abort the tx (claim rolls back) — crash at any point leaves the row claimable; `event_attempts`/`worker_heartbeats` tables; BullMQ stalled-job recovery settings (`WORKER_OPTIONS`); worker heartbeats + `/health` liveness (`workers[]`/`stalled`, degraded on stale worker or stalled job) | ✅ Done |
 | 8 | `event-status-api` | GET /events (list with filters) + GET /events/:id (detail + attempt/audit history), GET /events/:id/history, appropriate 404 handling | ⬜ Pending |
 | 9 | `minimal-frontend` | React/Vite (or Next.js) demo UI: submit form, event list with live-polling status badges, event detail drawer/page showing processing result and failure info | ⬜ Pending |
 | 10 | `test-suite` | **Jest** + Supertest + @nestjs/testing — unit (mocks), integration (real DB/Redis in Docker), e2e (full HTTP lifecycle via Supertest). Cover all 9 assignment scenarios incl. a worker-recovery test where practical | ⬜ Pending |
@@ -50,8 +50,8 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 
 - [x] Temporary vs permanent failure differentiation
 - [ ] Idempotency (no duplicate business effects)
-- [ ] Multiple workers / concurrency safety
-- [ ] Worker crash recovery (stalled jobs)
-- [ ] Processing consistency (exactly-once transactional write)
+- [x] Multiple workers / concurrency safety
+- [x] Worker crash recovery (stalled jobs + tx rollback)
+- [x] Processing consistency (exactly-once transactional write)
 - [x] Per-employee event ordering (parallel across employees)
 - [x] Extensible handler/strategy pattern for new event types

@@ -4,6 +4,7 @@ import * as Joi from 'joi';
 import { PrismaModule } from '../../../src/prisma/prisma.module';
 import { QueueModule } from '../../../src/queue/queue.module';
 import { ProcessingModule } from '../../../src/processing/processing.module';
+import { HeartbeatService } from '../../../src/processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
 
 @Module({
@@ -27,6 +28,13 @@ import { PayrollEventProcessor } from './payroll-event.processor';
           .default('random'),
         PAYROLL_MAX_RETRY_ATTEMPTS: Joi.number().integer().min(1).default(5),
         PAYROLL_RETRY_BASE_DELAY_MS: Joi.number().integer().min(0).default(1000),
+        // BullMQ stalled-job recovery (design D3): lockDuration must exceed the
+        // processing-tx timeout (10 s) so a healthy worker never false-stalls.
+        PAYROLL_WORKER_LOCK_DURATION_MS: Joi.number().integer().min(1000).default(30000),
+        PAYROLL_WORKER_STALLED_INTERVAL_MS: Joi.number().integer().min(1000).default(30000),
+        PAYROLL_WORKER_MAX_STALLED_COUNT: Joi.number().integer().min(1).default(1),
+        // Worker liveness heartbeat upsert cadence (design D4).
+        WORKER_HEARTBEAT_INTERVAL_MS: Joi.number().integer().min(1000).default(5000),
       }),
       validationOptions: {
         allowUnknown: true,
@@ -37,6 +45,6 @@ import { PayrollEventProcessor } from './payroll-event.processor';
     QueueModule,
     ProcessingModule,
   ],
-  providers: [PayrollEventProcessor],
+  providers: [PayrollEventProcessor, HeartbeatService],
 })
 export class WorkerModule {}

@@ -53,6 +53,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
 
   beforeEach(async () => {
     await prisma.payrollEvent.deleteMany({});
+    await prisma.eventAttempt.deleteMany({});
   });
 
   afterAll(async () => {
@@ -60,6 +61,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     await workerApp?.close();
     await app?.close();
     await prisma.payrollEvent.deleteMany({}).catch(() => undefined);
+    await prisma.eventAttempt.deleteMany({}).catch(() => undefined);
   });
 
   const http = () => request(app.getHttpServer());
@@ -111,11 +113,28 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     expect(row.result).toBeNull();
     expect(row.processedAt).toBeNull();
 
+    // R5 audit trail: the exhaustion path commits `queued → failed` and the
+    // FAILED(TEMPORARY) attempt row in ONE $transaction — exactly one row, with
+    // the FINAL attempt number (BullMQ's attemptsMade after 5 attempts). The
+    // row write and the audit insert became visible in the same commit, so by
+    // the time the event row reads FAILED the attempt row must already exist.
+    const attempts = await prisma.eventAttempt.findMany({
+      where: { eventId: id },
+    });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      eventId: id,
+      attemptNumber: 5,
+      status: 'FAILED',
+      errorType: 'TEMPORARY',
+    });
+
     // No re-enqueue loop: once FAILED the row is terminal — it must not flip
     // back to processing/success (the relay only picks non-terminal rows).
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const after = await prisma.payrollEvent.findUnique({ where: { id } });
     expect(after?.status).toBe('FAILED');
     expect(after?.result).toBeNull();
+    expect(await prisma.eventAttempt.count({ where: { eventId: id } })).toBe(1);
   });
 });

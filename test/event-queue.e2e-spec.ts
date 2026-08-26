@@ -65,6 +65,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
 
   beforeEach(async () => {
     await prisma.payrollEvent.deleteMany({});
+    await prisma.eventAttempt.deleteMany({});
   });
 
   afterAll(async () => {
@@ -72,6 +73,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
     await workerApp?.close();
     await app?.close();
     await prisma.payrollEvent.deleteMany({}).catch(() => undefined);
+    await prisma.eventAttempt.deleteMany({}).catch(() => undefined);
   });
 
   const http = () => request(app.getHttpServer());
@@ -126,6 +128,20 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
         | null;
       expect(result?.reference).toMatch(/^SIM-/);
       expect(result?.employeeId).toBe(employeeId);
+
+      // R5 audit trail: the SUCCESS attempt row (attemptNumber 1 on first try)
+      // commits in the SAME transaction as the event → success write and carries
+      // the identical handler result.
+      const attempts = await prisma.eventAttempt.findMany({
+        where: { eventId: id },
+      });
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        eventId: id,
+        attemptNumber: 1,
+        status: 'SUCCESS',
+      });
+      expect(attempts[0].result).toEqual(result);
     });
   });
 

@@ -1,9 +1,13 @@
 import { Controller, Get, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createClient } from 'redis';
+import { PAYROLL_EVENTS_QUEUE } from '../../queue/queue.constants';
 import { HealthResponseDto } from './health-response.dto';
+import { WorkerLivenessDto } from './worker-liveness.dto';
 
 @ApiTags('health')
 @Controller('health')
@@ -13,32 +17,48 @@ export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    @InjectQueue(PAYROLL_EVENTS_QUEUE) private readonly queue: Queue,
   ) {}
 
   @Get()
   @ApiOperation({
     summary: 'Service health check',
     description:
-      'Returns service and dependency (PostgreSQL, Redis) status. Always HTTP 200; ' +
-      'consumers use the body to determine health.',
+      'Returns service, dependency (PostgreSQL, Redis), worker liveness, and queue ' +
+      'stall status. Always HTTP 200; consumers use the body to determine health. ' +
+      'Status is degraded when any dependency is unreachable, any worker heartbeat ' +
+      'is stale (HEALTH_WORKER_STALE_MS), or BullMQ reports stalled jobs.',
   })
   @ApiResponse({
     status: 200,
-    description: 'Service and dependency status',
+    description: 'Service, dependency, worker, and queue status',
     type: HealthResponseDto,
   })
   async check(): Promise<HealthResponseDto> {
-    const [dbStatus, redisStatus] = await Promise.all([
+    const staleMs = this.configService.get<number>('HEALTH_WORKER_STALE_MS', 15000);
+
+    const [dbStatus, redisStatus, workers, stalled] = await Promise.all([
       this.checkDatabase(),
       this.checkRedis(),
+      this.checkWorkers(staleMs),
+      this.checkStalledJobs(),
     ]);
 
-    const status = dbStatus === 'ok' && redisStatus === 'ok' ? 'ok' : 'degraded';
+    const anyStaleWorker = workers.some((worker) => worker.stale);
+    const status =
+      dbStatus === 'ok' &&
+      redisStatus === 'ok' &&
+      !anyStaleWorker &&
+      stalled === 0
+        ? 'ok'
+        : 'degraded';
 
     const response: HealthResponseDto = {
       status,
       db: dbStatus,
       redis: redisStatus,
+      workers,
+      stalled,
       uptime: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
     };
@@ -48,6 +68,46 @@ export class HealthController {
     }
 
     return response;
+  }
+
+  /**
+   * Worker liveness (design D4): every row of `worker_heartbeats` ages against
+   * HEALTH_WORKER_STALE_MS. A heartbeat failure (DB down) is NOT a hard fail for
+   * this helper — the DB check already surfaces that — it just reports no
+   * workers so the overall status reflects the dependency error instead.
+   */
+  private async checkWorkers(staleMs: number): Promise<WorkerLivenessDto[]> {
+    try {
+      const rows = await this.prisma.workerHeartbeat.findMany({
+        orderBy: { lastSeenAt: 'desc' },
+        select: { workerId: true, hostname: true, lastSeenAt: true },
+      });
+      const cutoff = Date.now() - staleMs;
+      return rows.map((row) => ({
+        workerId: row.workerId,
+        hostname: row.hostname,
+        lastSeenAt: row.lastSeenAt.toISOString(),
+        stale: row.lastSeenAt.getTime() < cutoff,
+      }));
+    } catch (error) {
+      this.logger.error('Worker heartbeat check failed', error);
+      return [];
+    }
+  }
+
+  /**
+   * BullMQ stalled-job count (R4). A queue call failure (Redis down) is a soft
+   * fail: the Redis check already degrades the overall status, and an empty
+   * stalled count keeps this helper from masking the dependency error.
+   */
+  private async checkStalledJobs(): Promise<number> {
+    try {
+      const counts = await this.queue.getJobCounts();
+      return (counts as { stalled?: number }).stalled ?? 0;
+    } catch (error) {
+      this.logger.error('Queue stalled-count check failed', error);
+      return 0;
+    }
   }
 
   private async checkDatabase(): Promise<'ok' | 'error'> {

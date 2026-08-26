@@ -1,7 +1,10 @@
 # Payroll Event Processing — Architecture & Reliability Proposal
 
-> **Status:** Proposal for review — created before feature implementation begins.
-> **Scope:** Full-system architecture + visual flows for the as-yet-unbuilt feature changes (roadmap changes 2–11).
+> **Status:** Living proposal — reliability decisions now match the implemented code.
+> Change 7 (`concurrency-and-crash-recovery`) is shipped: transactional row-locked
+> processing, `event_attempts`/`worker_heartbeats` tables, BullMQ stalled-job
+> recovery settings, and worker liveness in `/health`.
+> **Scope:** Full-system architecture + visual flows (roadmap changes 2–11).
 > **Related:** eraser.io Draft file contains the diagrams that illustrate this document.
 
 ---
@@ -48,6 +51,7 @@ See the **System Architecture** diagram in eraser.io. In prose:
                  │ payroll_events      │   │ BullMQ          │
                  │ event_attempts      │   │ (jobs/retries)  │
                  │ idempotency_records │   │                 │
+                 │ worker_heartbeats   │   │                 │
                  └──────────▲──────────┘   └──▲──────────────┘
                             │ claimed + written
                  ┌──────────┴──────────────────┴──────────────┐
@@ -71,7 +75,7 @@ See the **System Architecture** diagram in eraser.io. In prose:
 | **NestJS API** | DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue | Idempotency, fast response |
 | **Redis / BullMQ** | Job queue keyed per employee (`jobId = employeeId` → FIFO), delayed jobs for backoff, stalled-job detection | Ordering, retries, crash recovery |
 | **Worker** | Claim job, side-effect marker (`processing`), row lock, handler dispatch, provider call, transactional commit | Exactly-once, concurrency, recovery |
-| **PostgreSQL / Prisma** | `payroll_events` + `event_attempts`, unique constraints, status transition guard, `SELECT … FOR UPDATE SKIP LOCKED` | Ground truth, atomicity, dedup |
+| **PostgreSQL / Prisma** | `payroll_events` + `event_attempts` + `worker_heartbeats`, unique constraints, status transition guard, `SELECT … FOR UPDATE` (plain) row lock inside an interactive `$transaction` | Ground truth, atomicity, dedup |
 | **Simulated provider** | Random temp/perm failure (`PAYROLL_TEMPORARY_FAILURE_RATE`, `PAYROLL_PERMANENT_FAILURE_RATE`) | Testability of failure paths |
 
 ## 4. Event lifecycle
@@ -79,15 +83,15 @@ See the **System Architecture** diagram in eraser.io. In prose:
 State machine (see the **Event Lifecycle** diagram):
 
 ```
-                 submit                    enqueue                    claim + lock
+                 submit                    enqueue                 claim + lock (in ONE tx)
 POST /events ─────►  received  ───────────►  queued  ───────────────►  processing
                          │                                              │   │
-                         │                                              │   ├─ temp failure ── retry (exp. backoff) ──► queued  (bounded)
+                         │                                              │   ├─ temp failure ── RE-THROW → tx ABORT ──► queued  (claim rolled back)
                     persist                                          success   │
                     (status=received)                                  │   └─ permanent failure / max attempts ──► failed (dead-letter)
                                                                        ▼
                                                                     success
-                                      (transactional commit, attempt+result recorded)
+                        (transactional commit, attempt row + result written together)
 ```
 
 **Transitions:**
@@ -95,10 +99,11 @@ POST /events ─────►  received  ───────────► 
 | From → To | Trigger | Guard |
 |---|---|---|
 | `received` → `queued` | job enqueued after successful persist | transaction committed |
-| `queued` → `processing` | worker claims job | `UPDATE … WHERE status='queued'` must match 1 row |
-| `processing` → `success` | provider call succeeded | transactional write, status guard `processing→success` |
-| `processing` → `queued` | transient failure (retry) | attempts < max |
-| `processing` → `failed` | permanent failure OR retries exhausted | business error or max attempts |
+| `queued` → `processing` | worker claims job (inside the interactive tx, after `SELECT … FOR UPDATE`) | `UPDATE … WHERE status='queued'` must match 1 row; count 0 → skip |
+| `processing` → `success` | provider call succeeded | transaction commits `processing→success` + result/processed_at + SUCCESS attempt row together |
+| `processing` → `queued` | transient failure (retry) | **tx ABORT — no explicit reset write**: the re-throw rolls the claim back |
+| `processing` → `failed` | permanent failure | transaction commits `processing→failed` + FAILED(PERMANENT) attempt row together |
+| `queued` → `failed` | retries exhausted (transient) | `onFailed` array transaction commits `queued→failed` + FAILED(TEMPORARY) attempt row |
 | `failed` → (dead) | dead-letter | terminal, never reprocessed |
 
 ## 5. Reliability design (the core of the assignment)
@@ -121,19 +126,20 @@ Each requirement mapped to its enforcement point.
 
 ### R3 — Concurrency safety (multiple workers)
 - Per-employee FIFO: BullMQ `jobId = employeeId` keeps jobs for one employee ordered, while different employees process in parallel.
-- On top of the queue, the worker takes `SELECT … FOR UPDATE SKIP LOCKED` on the event row inside the processing transaction, so two workers can never process the same event concurrently.
-- **Enforced in:** queue job naming + DB row lock (`concurrency-and-crash-recovery` change).
+- On top of the queue, the worker takes `SELECT … FOR UPDATE` on the event row inside the processing transaction (`event-claim.ts`), so two workers can never process the same event concurrently — the loser blocks on the lock, then its guarded claim (`WHERE status='queued'`) matches 0 rows and it applies no side effects (skip).
+- **Enforced in:** queue job naming + DB row lock + guarded claim (`concurrency-and-crash-recovery`).
 
 ### R4 — Worker crash recovery
-- The event transitions to `processing` **before** any side-effect starts (side-effect marker), so a crash leaves a visible stuck state.
-- BullMQ **stalled-job detection** (`stalledInterval`, `maxStalledCount`) re-queues a job whose worker died mid-work.
-- Re-processing is safe because of the status transition guard (R5).
-- **Enforced in:** worker + BullMQ config; make visible in `/health`.
+- The claim (`queued → processing`) + terminal write now run in **ONE transaction**: a crash or dropped connection at any point before commit ABORTS the transaction, so the row rolls back to `queued` — it can never be left stuck in `processing` (the old non-transactional claim could).
+- BullMQ **stalled-job recovery** (`WORKER_OPTIONS`: `lockDuration` 30 s > the 10 s processing-tx timeout, `stalledInterval` 30 s, `maxStalledCount` 1) re-queues a job whose worker died mid-work.
+- Workers publish a **liveness heartbeat** (`worker_heartbeats`, upserted `WORKER_HEARTBEAT_INTERVAL_MS`/5 s) and `/health` degrades when any heartbeat is stale (`HEALTH_WORKER_STALE_MS`/15 s) or `stalled > 0`.
+- **Enforced in:** worker + BullMQ config (env-tunable `PAYROLL_WORKER_*`), `HeartbeatService`, `/health` (`workers[]`/`stalled`).
 
 ### R5 — Exactly-once / processing consistency
-- The success write is **transactional**: `event → success` + `event_attempts` row (result) commit together.
-- The update is guarded: `UPDATE payroll_events SET status='success' WHERE id=? AND status='processing'` — a crash-then-reprocess can only succeed once; the second attempt matches 0 rows and is discarded.
-- **Enforced in:** worker transactional commit + status guard.
+- The terminal write is **transactional**: `event → success/failed` + the `event_attempts` row commit in the SAME transaction as the guarded claim — the row lock means exactly one worker holds the claim, so the handler result applied exactly once.
+- The update is guarded: `UPDATE payroll_events SET status='success' WHERE id=? AND status='processing'` — a crash-then-reprocess can only succeed once; the second attempt matches 0 rows and is skipped.
+- Retry exhaustion writes `queued → failed` + FAILED(TEMPORARY) attempt row in one array `$transaction`.
+- **Enforced in:** transactional `event-claim.ts` + status guard + `onFailed` exhaustion transaction.
 
 ### R6 — Event ordering per employee
 - Monotonic `sequence` per employee (computed on insert), used for inspection/audit and tests.
@@ -179,18 +185,18 @@ See the **ERD** in eraser.io. Four tables:
 
 **Constraints/indexes:** `UNIQUE (scope, key)` — the dedup arbiter; index on `expires_at` for the sweep (`deleteMany(expires_at < now)`).
 
-**`event_attempts`** — append-only audit trail (one row per processing attempt).
+**`event_attempts`** — append-only audit trail; one row is written AT the terminal point (never per attempt start), committed in the same transaction as the terminal `payroll_events` write (`AttemptStatus`/`AttemptErrorType` enums).
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | |
-| `event_id` | UUID FK → `payroll_events` | |
-| `attempt_number` | int | 1-based |
-| `status` | enum | `processing` \| `success` \| `failed` |
+| `event_id` | UUID FK → `payroll_events` | indexed (`@@index([eventId])`) |
+| `attempt_number` | int | 1-based; the attempt that reached the terminal outcome |
+| `status` | enum | `SUCCESS` \| `FAILED` |
 | `error_type` | enum nullable | `TEMPORARY` \| `PERMANENT` |
 | `failed_reason` | text nullable | why it failed |
-| `result` | JSONB nullable | provider result on success |
-| `started_at` / `finished_at` | timestamptz nullable | |
+| `result` | JSONB nullable | provider result on success (== the event row's `result`) |
+| `created_at` | timestamptz | commit time of the terminal transition |
 
 **`worker_heartbeats`** — worker liveness for `/health` (D4).
 
@@ -218,27 +224,27 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 
 ### 7.2 Worker processing (exactly-once, retry, recovery)
 
-1. Worker fires for a claimed job.
-2. **Side-effect marker:** `UPDATE payroll_events SET status='processing' WHERE id=? AND status='queued'` — 0 rows → stale/duplicate, skip.
-3. **Concurrency lock:** `SELECT … FOR UPDATE SKIP LOCKED` on the row.
-4. Append `event_attempts` (`attempt_number` next, status `processing`).
-5. Resolve handler via registry by `event_type`.
-6. Call simulated provider.
-7. **Success** → commit `[event → success + attempt → success w/ result]` → ack job.
-8. **Transient failure** → mark attempt `failed(TEMPORARY)`; if `attempts < max` re-enqueue with exponential backoff → `queued`; else → step 9.
-9. **Permanent failure / exhausted retries** → `event → failed`, attempt `failed(PERMANENT, reason)`, dead-letter (no further processing).
-10. **Crash anywhere** → event stuck in `processing`; BullMQ stalled-job detection re-queues; a fresh worker reprocesses safely thanks to the status guard (step 2) — a crash-then-reprocess can never double-apply.
+1. Worker fires for a claimed job; `received → queued` ensure (relay make-safe) runs **outside** the claim transaction, then `HeartbeatService.touch()` bumps the worker liveness row.
+2. **ONE interactive transaction** (`event-claim.ts`, `{ timeout: 10_000, maxWait: 5_000 }`):
+   a. **Concurrency lock:** `SELECT id FROM payroll_events WHERE id=? FOR UPDATE` (`$queryRaw` — Prisma has no FOR UPDATE builder).
+   b. **Guarded claim:** `UPDATE payroll_events SET status='processing' WHERE id=? AND status='queued'` — 0 rows → stale/duplicate, skip with no side effects.
+   c. **Payload read** inside the tx (the DB row stays the source of truth), then dispatch through the handler registry.
+3. **Success** → commit `[event → success + result/processed_at + attempt → SUCCESS w/ result]` → ack job.
+4. **Transient failure** → re-throw inside the tx → **ABORT** → the claim rolls back to `queued` (no explicit reset) → BullMQ schedules the retry with exponential backoff.
+5. **Permanent failure** → commit `[event → failed + attempt → FAILED(PERMANENT, reason)]`, no retry (dead-letter).
+6. **Retries exhausted** (transient) → `onFailed` array `$transaction` commits `[queued → failed + attempt → FAILED(TEMPORARY, reason)]`, audit row recording the final attempt number.
+7. **Crash anywhere** between lock and commit → the transaction aborts → the row is back in `queued` (never stuck in `processing`); BullMQ stalled-job detection additionally re-queues a job whose worker died mid-work, and a fresh worker reprocesses safely thanks to the guarded claim + terminal status guard.
 
 ## 8. Failure modes & recovery
 
 | Failure | Observable effect | Recovery |
 |---|---|---|
-| Provider down (all attempts) | status stuck `processing`, job retrying | backoff → eventually `failed` w/ reason, dead-letter |
-| Business/validation error from provider | attempt `error_type=PERMANENT` | event `failed`, never retried |
-| Worker crashes mid-processing | event `processing`, job stalled | BullMQ stalled-job detection re-queues → reprocess (guarded) |
+| Provider down (all attempts) | row returns to `queued` between retries, ends `failed` | tx abort on transient; exhausted → `failed` w/ reason, dead-letter |
+| Business/validation error from provider | attempt `error_type=PERMANENT` | event `failed` (tx), never retried |
+| Worker crashes mid-processing | transaction never commits | tx abort rolls the row back to `queued`; stalled-job detection re-queues → reprocess (guarded) |
 | Duplicate client submit (same key) | second `POST` | idempotency short-circuit returns stored `201` |
 | Duplicate submit race (concurrent) | unique constraint violation | caught → treated as duplicate |
-| Two workers same event | both claim same job row | `SKIP LOCKED` + status guard → only one proceeds |
+| Two workers same event | both claim same job row | `FOR UPDATE` row lock + guarded claim → only one proceeds |
 | Invalid payload | — | `400` at submission, nothing persisted |
 
 ## 9. Mapping to the roadmap
@@ -251,7 +257,7 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 | 4 `simulated-payroll-processor` | handler registry, simulated provider, attempt logging |
 | 5 `retry-and-failure-strategy` | temp vs perm, backoff, dead-letter |
 | 6 `idempotency-layer` | required Idempotency-Key, dedupe |
-| 7 `concurrency-and-crash-recovery` | row locking, status guard, stalled jobs, exactly-once |
+| 7 `concurrency-and-crash-recovery` ✅ | row lock + transactional claim/terminal commit, event_attempts audit, stalled-job recovery config, worker heartbeats + /health liveness |
 | 8 `event-status-api` | GET /events, GET /events/:id/history |
 | 9 `minimal-frontend` | demo UI (submit / live status) |
 | 10 `test-suite` | unit/integration/e2e incl. recovery test |
@@ -274,15 +280,21 @@ Env vars: `PAYROLL_MAX_ATTEMPTS` (5), `PAYROLL_RETRY_BASE_DELAY_MS` (1000), `PAY
 Permanent errors are thrown **non-retryable**, so the job fails immediately and the DB is the dead-letter (`status='failed'` + `error_type='PERMANENT'` + `failedReason`). Set `removeOnComplete`/`removeOnFail` so Redis stays bounded — the audit trail lives in Postgres, not Redis.
 (Verified: BullMQ 4.x supports `jitter` in exponential backoff.)
 
-### D4 — Worker liveness: heartbeat table + `/health` deep check
-New `worker_heartbeats` table (`worker_id` PK, `hostname`, `started_at`, `last_seen_at`) upserted every 5 s per worker. `/health` deep check returns per-worker `lastSeenAt` plus the BullMQ `stalled` job count (`queue.getJobCounts()['stalled']`); any worker stale > 15 s or `stalled > 0` ⇒ `degraded`.
-Keep BullMQ defaults for recovery: `stalledInterval: 30_000`, `maxStalledCount: 1`, `lockDuration: 30_000` — a crashed worker's job is re-queued within ~30 s and our status guard makes reprocessing safe.
+### D4 — Worker liveness: heartbeat table + `/health` deep check (✅ implemented)
+New `worker_heartbeats` table (`worker_id` PK, `hostname`, `started_at`, `last_seen_at`) upserted by `HeartbeatService` (`WORKER_HEARTBEAT_INTERVAL_MS`, default 5000, unref'd timer + immediate touch; `workerId` = `WORKER_ID` env or `${hostname}:${pid}`). `/health` (`HealthResponseDto`) now returns `workers: WorkerLivenessDto[]` (`workerId`/`hostname`/`lastSeenAt`/`stale`) plus `stalled: number` (`queue.getJobCounts()`); any worker `lastSeenAt` older than `HEALTH_WORKER_STALE_MS` (default 15000) or `stalled > 0` ⇒ `degraded`.
+BullMQ recovery is env-tunable via `WORKER_OPTIONS` (computed at module import — config freezes at import): `lockDuration` (default 30_000, must exceed the 10 s processing-tx timeout so a healthy worker never false-stalls), `stalledInterval` (30_000), `maxStalledCount` (1) — a crashed worker's job is re-queued within ~30 s and our status guard makes reprocessing safe.
 
-### D5 — Row lock: interactive Prisma transaction with `$queryRaw` (isolated)
+### D5 — Row lock: interactive Prisma transaction with `$queryRaw` (✅ implemented)
 ```ts
 await prisma.$transaction(async (tx) => {
-  await tx.$queryRaw`SELECT id FROM "payroll_events" WHERE id = ${id} FOR UPDATE SKIP LOCKED`;
-  // …guarded UPDATE (status 'queued' → 'processing') + attempt insert, then commit
-}, { timeout: 10_000, maxWait: 10_000 });
+  await tx.$queryRaw`SELECT id FROM payroll_events WHERE id = ${eventId} FOR UPDATE`;
+  const claimed = await tx.payrollEvent.updateMany({
+    where: { id: eventId, status: 'queued' },
+    data: { status: 'processing' },
+  });
+  if (claimed.count === 0) return { outcome: 'skipped' };
+  // payload read → handler dispatch → terminal update + event_attempts row,
+  // OR re-throw TransientPayrollFailureError to ABORT (claim rolls back).
+}, { timeout: 10_000, maxWait: 5_000 });
 ```
-**Why:** Prisma's query builder has no FOR UPDATE / SKIP LOCKED support (verified); the supported way is `$queryRaw` inside an interactive `$transaction`, which also exposes the guarded `UPDATE`. Isolate it in one repository method (`src/processing/event-claim.ts`) and keep the transaction short (well under `lockDuration`).
+**Why:** Prisma's query builder has no FOR UPDATE support (verified); the supported way is `$queryRaw` inside an interactive `$transaction`, which also exposes the guarded `UPDATE`. Plain `FOR UPDATE` (not `SKIP LOCKED`) is correct here because the second contender blocks, then its guarded claim matches 0 rows and it skips — every job still gets one definitive verdict. Isolated in `src/processing/event-claim.ts`; the transaction stays short (well under `lockDuration`), and a transient failure re-throw aborts it with **no explicit `processing → queued` reset** — the rollback IS the reset, so a crash at any point also leaves the row claimable (R4).

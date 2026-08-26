@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FailureConfig, SimulatedPayrollProvider } from './simulated-payroll-provider';
 import { HandlerRegistry } from './handler-registry';
+import { EventClaim } from './event-claim';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
@@ -20,10 +21,11 @@ import { SalaryChangeHandler } from './handlers/salary-change.handler';
     },
     SimulatedPayrollProvider,
     HandlerRegistry,
+    EventClaim,
     BankAccountChangeHandler,
     AddressChangeHandler,
     SalaryChangeHandler,
   ],
-  exports: [HandlerRegistry, SimulatedPayrollProvider, FailureConfig],
+  exports: [HandlerRegistry, EventClaim, SimulatedPayrollProvider, FailureConfig],
 })
 export class ProcessingModule {}

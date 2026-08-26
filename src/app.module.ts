@@ -35,6 +35,9 @@ import { EventsModule } from './events/events.module';
         PAYROLL_RETRY_BASE_DELAY_MS: Joi.number().integer().min(0).default(1000),
         IDEMPOTENCY_TTL_SECONDS: Joi.number().integer().min(1).default(86400),
         IDEMPOTENCY_SWEEP_INTERVAL_MS: Joi.number().integer().min(1000).default(60000),
+        // Worker-liveness staleness threshold for /health (design D4): a worker
+        // whose last_seen_at is older than this (ms) is reported stale/degraded.
+        HEALTH_WORKER_STALE_MS: Joi.number().integer().min(1000).default(15000),
       }),
       validationOptions: {
         allowUnknown: true,

@@ -4,19 +4,24 @@ import { PayrollEventQueueService } from '../../../src/queue/payroll-event-queue
 import { PAYROLL_EVENT_JOB } from '../../../src/queue/queue.constants';
 import { EventStatus } from '@prisma/client';
 import { EventType } from '../../../src/events/event-type';
-import { ProcessingResult } from '../../../src/processing/processing.types';
-import { HandlerRegistry } from '../../../src/processing/handler-registry';
-import {
-  TransientPayrollFailureError,
-  PermanentPayrollFailureError,
-} from '../../../src/processing/errors/payroll-processing.error';
+import { EventClaim } from '../../../src/processing/event-claim';
+import { HeartbeatService } from '../../../src/processing/heartbeat.service';
+import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
 import { ConfigService } from '@nestjs/config';
 
 /**
  * Direct-instantiation unit tests. The processor must not touch `WorkerHost.worker`
  * at construction (BullRegistrar only populates it during Nest's onModuleInit), so
- * `new PayrollEventProcessor(prisma, queueService, registry, config)` below is safe in
- * isolation.
+ * `new PayrollEventProcessor(prisma, queueService, config, eventClaim, heartbeat)`
+ * below is safe in isolation.
+ *
+ * The claim → dispatch → terminal-write lifecycle is DELEGATED to `EventClaim`
+ * (#7, design D1): everything the processor itself must verify is the received →
+ * queued ensure staying OUTSIDE the transaction, the heartbeat touch, the
+ * claimAndProcess delegation, the outcome-driven structured log lines, and the
+ * exhausted-retry `$transaction([...])` in onFailed. The transactional contract
+ * itself (claim/commit order, skip, rollback-on-transient) is covered in
+ * `event-claim.spec.ts`.
  *
  * FIFO continuation is driven by the BullMQ `completed` event (NOT from inside
  * `process()` — while `process()` runs the job is still active and its own
@@ -32,37 +37,18 @@ describe('PayrollEventProcessor', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
     },
+    eventAttempt: { create: jest.fn() },
+    $transaction: jest.fn(),
   };
   const queueService = { enqueue: jest.fn() };
-  const registry = { resolve: jest.fn() };
   const configService = {
     get: jest.fn((key: string, defaultValue?: unknown) => {
       if (key === 'PAYROLL_MAX_RETRY_ATTEMPTS') return 5;
       return defaultValue;
     }),
   };
-
-  const successResult: ProcessingResult = {
-    reference: 'SIM-test-ref',
-    employeeId: 'emp-1',
-    effectiveDate: '2026-09-01',
-    acknowledged: { iban: 'DE89370400440532013000' },
-  };
-
-  const stubStrategy = (behavior: 'success' | 'transient' | 'permanent' | 'unknown') => ({
-    handle: jest.fn(async () => {
-      if (behavior === 'transient') {
-        throw new TransientPayrollFailureError('simulated down');
-      }
-      if (behavior === 'permanent') {
-        throw new PermanentPayrollFailureError('business rejection');
-      }
-      if (behavior === 'unknown') {
-        throw new Error('unexpected error');
-      }
-      return successResult;
-    }),
-  });
+  const eventClaim = { claimAndProcess: jest.fn() };
+  const heartbeat = { touch: jest.fn() };
 
   const job = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -83,80 +69,88 @@ describe('PayrollEventProcessor', () => {
     processor = new PayrollEventProcessor(
       prisma as unknown as PrismaService,
       queueService as unknown as PayrollEventQueueService,
-      registry as unknown as HandlerRegistry,
       configService as unknown as ConfigService,
+      eventClaim as unknown as EventClaim,
+      heartbeat as unknown as HeartbeatService,
     );
-    prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
-    prisma.payrollEvent.findUnique.mockResolvedValue({
-      payload: successResult.acknowledged,
+    // Delegate the transactional lifecycle to EventClaim; default = success.
+    eventClaim.claimAndProcess.mockResolvedValue({
+      outcome: 'success',
+      reference: 'SIM-test-ref',
     });
+    heartbeat.touch.mockResolvedValue(undefined);
+    prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
     prisma.payrollEvent.findFirst.mockResolvedValue(null);
     queueService.enqueue.mockResolvedValue(undefined);
+    // Array-form $transaction (onFailed exhaustion): await each op like Prisma.
+    prisma.$transaction.mockImplementation(async (ops: unknown[]) => {
+      for (const op of ops) {
+        await op;
+      }
+      return ops;
+    });
+    prisma.eventAttempt.create.mockResolvedValue({ id: 'attempt-1' });
   });
 
-  describe('claim → dispatch → success lifecycle', () => {
-    beforeEach(() => {
-      registry.resolve.mockReturnValue(stubStrategy('success'));
-    });
-
-    it('claims, dispatches via the registry, and stores the result with processed_at', async () => {
+  describe('claim → dispatch → success lifecycle (delegated)', () => {
+    it('ensures received→queued, touches the heartbeat, and delegates to EventClaim', async () => {
       await processor.process(job());
 
-      expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(1, {
+      // The received → queued ensure stays OUTSIDE the transaction: it is the
+      // only updateMany the processor issues itself.
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
         where: { id: 'evt-1', status: EventStatus.RECEIVED },
         data: { status: EventStatus.QUEUED },
       });
-      expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(2, {
-        where: { id: 'evt-1', status: EventStatus.QUEUED },
-        data: { status: EventStatus.PROCESSING },
-      });
 
-      expect(prisma.payrollEvent.findUnique).toHaveBeenCalledWith({
-        where: { id: 'evt-1' },
-        select: { payload: true },
-      });
-      expect(registry.resolve).toHaveBeenCalledWith(EventType.BANK_ACCOUNT_CHANGE);
+      expect(heartbeat.touch).toHaveBeenCalledTimes(1);
 
-      expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(3, {
-        where: { id: 'evt-1', status: EventStatus.PROCESSING },
-        data: {
-          status: EventStatus.SUCCESS,
-          processedAt: expect.any(Date),
-          result: successResult,
-        },
+      // The whole claim → dispatch → terminal-write lifecycle went through
+      // EventClaim with the identity + 1-based attempt number.
+      expect(eventClaim.claimAndProcess).toHaveBeenCalledTimes(1);
+      expect(eventClaim.claimAndProcess).toHaveBeenCalledWith({
+        eventId: 'evt-1',
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 1,
+        attempt: 1,
       });
+    });
+
+    it('logs the succeeded line with the outcome reference', async () => {
+      const logSpy = jest.spyOn(processor['logger'], 'log');
+      await processor.process(job());
+
+      const succeeded = logSpy.mock.calls.find((c) =>
+        String(c[0]).includes('succeeded'),
+      );
+      expect(succeeded).toBeDefined();
+      expect(String(succeeded![0])).toContain('reference SIM-test-ref');
     });
   });
 
   // ── Retry / Failure Strategy (R1) ─────────────────────────────────────────
 
-  describe('transient failure — retry path (R1, D1, D2)', () => {
+  describe('transient failure — claimAndProcess re-throws (R1, D1, D2)', () => {
     beforeEach(() => {
-      registry.resolve.mockReturnValue(stubStrategy('transient'));
+      eventClaim.claimAndProcess.mockRejectedValue(
+        new TransientPayrollFailureError('simulated down'),
+      );
     });
 
-    it('resets the event row to queued before re-throwing (D2)', async () => {
-      await expect(processor.process(job())).rejects.toThrow(TransientPayrollFailureError);
+    it('re-throws WITHOUT any explicit processing → queued reset write (the tx abort is the reset)', async () => {
+      await expect(processor.process(job())).rejects.toBeInstanceOf(
+        TransientPayrollFailureError,
+      );
 
-      // 1: received→queued, 2: queued→processing, 3: processing→queued (reset)
-      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(3);
-      expect(prisma.payrollEvent.updateMany).toHaveBeenNthCalledWith(3, {
-        where: { id: 'evt-1', status: EventStatus.PROCESSING },
-        data: { status: EventStatus.QUEUED },
-      });
-    });
-
-    it('re-throws the transient error so BullMQ schedules the next attempt', async () => {
-      await expect(processor.process(job())).rejects.toBeInstanceOf(TransientPayrollFailureError);
-    });
-
-    it('does NOT write the failed status on a transient error', async () => {
-      await expect(processor.process(job())).rejects.toThrow();
-
-      const updateCalls = prisma.payrollEvent.updateMany.mock.calls as Array<
+      // Only the received → queued ensure ran at the processor layer — no
+      // `processing → queued` reset update.
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(1);
+      const writtenStatuses = (prisma.payrollEvent.updateMany.mock.calls as Array<
         [{ data: { status: EventStatus } }]
-      >;
-      const writtenStatuses = updateCalls.map((c) => c[0].data.status);
+      >).map((c) => c[0].data.status);
+      expect(writtenStatuses).not.toContain(EventStatus.PROCESSING);
       expect(writtenStatuses).not.toContain(EventStatus.FAILED);
     });
 
@@ -164,82 +158,87 @@ describe('PayrollEventProcessor', () => {
       const logSpy = jest.spyOn(processor['logger'], 'warn');
       await expect(processor.process(job())).rejects.toThrow();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('retrying'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('retrying'));
       const warnMsg = logSpy.mock.calls[0][0] as string;
       expect(warnMsg).toContain('evt-1');
       expect(warnMsg).toContain('emp-1');
+      expect(warnMsg).toContain('1/5');
     });
   });
 
-  describe('permanent failure — no retry path (R1, D1)', () => {
+  describe('permanent failure — terminal verdict from claimAndProcess (R1, D1)', () => {
     beforeEach(() => {
-      registry.resolve.mockReturnValue(stubStrategy('permanent'));
+      eventClaim.claimAndProcess.mockResolvedValue({
+        outcome: 'permanent-failure',
+        reason: 'business rejection',
+      });
     });
 
-    it('writes failed status and does NOT re-throw', async () => {
+    it('does NOT re-throw (no further BullMQ attempts)', async () => {
       await expect(processor.process(job())).resolves.toBeUndefined();
-
-      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { status: EventStatus.FAILED },
-        }),
-      );
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(1); // ensure only
     });
 
-    it('logs a permanent-failure entry at error level', async () => {
+    it('logs a permanent-failure entry at error level with the reason', async () => {
       const logSpy = jest.spyOn(processor['logger'], 'error');
       await processor.process(job());
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('permanent-failure'),
       );
+      expect(String(logSpy.mock.calls[0][0])).toContain('business rejection');
     });
   });
 
-  describe('unknown error — treated as permanent failure (R1, D1)', () => {
-    beforeEach(() => {
-      registry.resolve.mockReturnValue(stubStrategy('unknown'));
-    });
+  describe('unknown error from the transaction — treated as infrastructure', () => {
+    it('does NOT re-throw the Transient class but re-throws the raw error', async () => {
+      eventClaim.claimAndProcess.mockRejectedValue(new Error('db timeout'));
 
-    it('writes failed status and does NOT re-throw on unknown error', async () => {
-      await expect(processor.process(job())).resolves.toBeUndefined();
-
-      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { status: EventStatus.FAILED },
-        }),
-      );
-    });
-
-    it('logs a permanent-failure entry for unknown errors', async () => {
+      await expect(processor.process(job())).rejects.toThrow('db timeout');
       const logSpy = jest.spyOn(processor['logger'], 'error');
-      await processor.process(job());
-
+      await processor.process(job()).catch(() => undefined);
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('permanent-failure'),
+        expect.stringContaining('retrying (infrastructure)'),
       );
     });
   });
 
-  describe('exhausted-retry handler — @OnWorkerEvent("failed") (R1, D4)', () => {
+  describe('exhausted-retry handler — @OnWorkerEvent("failed") (R1, D4, R5)', () => {
     const transientError = new TransientPayrollFailureError('down');
 
-    it('writes failed row when all attempts are exhausted', async () => {
-      // job.attemptsMade >= job.opts.attempts → exhausted
+    it('writes failed row + FAILED(TEMPORARY) attempt row in ONE $transaction array when exhausted', async () => {
+      // job.attemptsMade >= job.opts.attempts → exhausted (5 attempts ran).
       const exhaustedJob = {
         name: PAYROLL_EVENT_JOB,
-        data: { eventId: 'evt-x', employeeId: 'emp-x', eventType: EventType.SALARY_CHANGE, sequence: 3 },
+        data: {
+          eventId: 'evt-x',
+          employeeId: 'emp-x',
+          eventType: EventType.SALARY_CHANGE,
+          sequence: 3,
+        },
         attemptsMade: 5,
         opts: { attempts: 5 },
       } as never;
 
       await processor.onFailed(exhaustedJob, transientError);
 
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const ops = prisma.$transaction.mock.calls[0][0] as unknown[];
+      expect(ops).toHaveLength(2);
+
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
         where: { id: 'evt-x', status: EventStatus.QUEUED },
         data: { status: EventStatus.FAILED },
+      });
+      // The audit row records the FINAL attempt that consumed the retries.
+      expect(prisma.eventAttempt.create).toHaveBeenCalledWith({
+        data: {
+          eventId: 'evt-x',
+          attemptNumber: 5,
+          status: 'FAILED',
+          errorType: 'TEMPORARY',
+          failedReason: 'down',
+        },
       });
     });
 
@@ -247,7 +246,12 @@ describe('PayrollEventProcessor', () => {
       const logSpy = jest.spyOn(processor['logger'], 'error');
       const exhaustedJob = {
         name: PAYROLL_EVENT_JOB,
-        data: { eventId: 'evt-x', employeeId: 'emp-x', eventType: EventType.SALARY_CHANGE, sequence: 3 },
+        data: {
+          eventId: 'evt-x',
+          employeeId: 'emp-x',
+          eventType: EventType.SALARY_CHANGE,
+          sequence: 3,
+        },
         attemptsMade: 5,
         opts: { attempts: 5 },
       } as never;
@@ -258,62 +262,77 @@ describe('PayrollEventProcessor', () => {
     });
 
     it('is a no-op (no DB write) when there are remaining attempts (mid-retry)', async () => {
-      // job.attemptsMade < job.opts.attempts → mid-retry, no-op
       const midRetryJob = {
         name: PAYROLL_EVENT_JOB,
-        data: { eventId: 'evt-y', employeeId: 'emp-y', eventType: EventType.ADDRESS_CHANGE, sequence: 1 },
+        data: {
+          eventId: 'evt-y',
+          employeeId: 'emp-y',
+          eventType: EventType.ADDRESS_CHANGE,
+          sequence: 1,
+        },
         attemptsMade: 2,
         opts: { attempts: 5 },
       } as never;
 
       await processor.onFailed(midRetryJob, transientError);
 
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.eventAttempt.create).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
     });
 
     it('ignores jobs with an unrecognised name', async () => {
       const otherJob = {
         name: 'some-other-job',
-        data: { eventId: 'evt-z', employeeId: 'emp-z', eventType: EventType.ADDRESS_CHANGE, sequence: 1 },
+        data: {
+          eventId: 'evt-z',
+          employeeId: 'emp-z',
+          eventType: EventType.ADDRESS_CHANGE,
+          sequence: 1,
+        },
         attemptsMade: 5,
         opts: { attempts: 5 },
       } as never;
 
       await processor.onFailed(otherJob, transientError);
 
-      expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.eventAttempt.create).not.toHaveBeenCalled();
     });
   });
 
-  // ── Pre-existing lifecycle tests (unchanged) ───────────────────────────────
+  // ── Pre-existing lifecycle tests (unchanged behaviour) ────────────────────
 
   describe('stale / duplicate job', () => {
-    it('skips a job whose row is not queued and never invokes a handler', async () => {
-      prisma.payrollEvent.updateMany
-        .mockResolvedValueOnce({ count: 0 }) // received → queued: no match
-        .mockResolvedValueOnce({ count: 0 }); // queued → processing: no match
+    it('logs skip when claimAndProcess reports the row is no longer queued', async () => {
+      eventClaim.claimAndProcess.mockResolvedValue({ outcome: 'skipped' });
 
+      const logSpy = jest.spyOn(processor['logger'], 'warn');
       await processor.process(job());
 
-      // No terminal update, no payload read, no handler, no relay.
-      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(2);
-      expect(prisma.payrollEvent.findUnique).not.toHaveBeenCalled();
-      expect(registry.resolve).not.toHaveBeenCalled();
-      expect(prisma.payrollEvent.findFirst).not.toHaveBeenCalled();
+      expect(claimResolver()).toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping stale/duplicate job for event evt-1'),
+      );
+      // No relay — the completed event drives FIFO continuation, not process().
       expect(queueService.enqueue).not.toHaveBeenCalled();
+      expect(prisma.payrollEvent.findFirst).not.toHaveBeenCalled();
     });
 
     it('never double-applies: a crash-then-reprocess cannot succeed twice', async () => {
-      // Terminal update already applied (row already SUCCESS) → claim fails.
-      prisma.payrollEvent.updateMany
-        .mockResolvedValueOnce({ count: 0 })
-        .mockResolvedValueOnce({ count: 0 });
+      // Row already SUCCESS → claimAndProcess reports skipped on reprocess.
+      eventClaim.claimAndProcess.mockResolvedValue({ outcome: 'skipped' });
 
       await processor.process(job());
 
-      const terminal = prisma.payrollEvent.updateMany.mock.calls[2];
+      expect(processor['logger']).toBeTruthy(); // no throw, no terminal write
+      const terminal = prisma.payrollEvent.updateMany.mock.calls[1];
       expect(terminal).toBeUndefined();
     });
+
+    function claimResolver(): unknown {
+      return eventClaim.claimAndProcess.mock.results[0]?.value;
+    }
   });
 
   describe('FIFO relay (completion-driven)', () => {

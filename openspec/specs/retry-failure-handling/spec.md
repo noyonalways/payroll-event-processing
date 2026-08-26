@@ -7,11 +7,11 @@ Define the retry and terminal failure handling strategy for asynchronous payroll
 ## Requirements
 
 ### Requirement: Transient failures are retried with exponential backoff
-The system SHALL configure BullMQ jobs with a maximum attempt count controlled by `PAYROLL_MAX_RETRY_ATTEMPTS` (default `5`) and an exponential backoff delay whose base is controlled by `PAYROLL_RETRY_BASE_DELAY_MS` (default `1000` ms). When a `TransientPayrollFailureError` is thrown during processing, the worker SHALL reset the event row from `processing` to `queued` and SHALL re-throw the error so BullMQ schedules the next attempt at the computed backoff delay.
+The system SHALL configure BullMQ jobs with a maximum attempt count controlled by `PAYROLL_MAX_RETRY_ATTEMPTS` (default `5`) and an exponential backoff delay whose base is controlled by `PAYROLL_RETRY_BASE_DELAY_MS` (default `1000` ms). When a `TransientPayrollFailureError` is thrown during processing, the worker SHALL abort the processing transaction — rolling the row-locked claim back to `queued` — and SHALL re-throw the error so BullMQ schedules the next attempt at the computed backoff delay.
 
-#### Scenario: Transient failure triggers retry and row reset
+#### Scenario: Transient failure triggers retry and rolls back the claim
 - **WHEN** the handler throws a `TransientPayrollFailureError` on attempt N (where N < max attempts)
-- **THEN** the event row SHALL be reset to `queued` status
+- **THEN** the processing transaction SHALL be aborted so the event row returns to `queued` status
 - **AND** the `process()` method SHALL re-throw the error so BullMQ schedules attempt N+1 with exponential backoff
 
 #### Scenario: Transient failure logs retrying context
