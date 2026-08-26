@@ -35,4 +35,4 @@
 ## 6. Cleanup & commit
 
 - [x] 6.1 Grep for stale references to the old non-transactional claim model ("claim commits before work", explicit transient `processing→queued` reset comments, absent tables in docs) and remove/update
-- [ ] 6.2 Conventional commits per group (e.g. `feat(worker): transactional row-locked processing`, `feat(worker): stalled-job recovery settings`, `feat(health): worker liveness`) with the new tables called out in the migration commit — **left to the user** (per the no-commit directive: "no need commit I will commit.")
+- [x] 6.2 Conventional commits per group (e.g. `feat(worker): transactional row-locked processing`, `feat(worker): stalled-job recovery settings`, `feat(health): worker liveness`) with the new tables called out in the migration commit — **left to the user** (per the no-commit directive: "no need commit I will commit.") — user committed as `38ab507`

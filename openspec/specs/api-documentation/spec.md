@@ -44,11 +44,11 @@ The system SHALL document the `POST /events` operation with: a request body whos
 - **THEN** its `payload` property SHALL reference `BankAccountChangePayloadDto`, `AddressChangePayloadDto`, and `SalaryChangePayloadDto` via `oneOf`
 
 ### Requirement: GET /health is documented with a typed response
-The system SHALL document the `GET /health` operation with an HTTP `200` response typed as `HealthResponseDto`, whose properties `status`, `db`, `redis`, `uptime`, and `timestamp` each carry a description and example.
+The system SHALL document the `GET /health` operation with an HTTP `200` response typed as `HealthResponseDto`, whose properties `status`, `db`, `redis`, `uptime`, `timestamp`, `workers`, and `stalled` each carry a description and example. `workers` SHALL be an array of worker-liveness objects exposing `workerId`, `hostname`, `lastSeenAt`, and `stale`; `stalled` SHALL be the count of stalled BullMQ jobs.
 
 #### Scenario: Health schema present in components
 - **WHEN** a client inspects the OpenAPI document for `GET /health`
-- **THEN** the 200 response SHALL reference `HealthResponseDto` and `HealthResponseDto` SHALL declare `status`, `db`, `redis`, `uptime`, and `timestamp`
+- **THEN** the 200 response SHALL reference `HealthResponseDto` and `HealthResponseDto` SHALL declare `status`, `db`, `redis`, `uptime`, `timestamp`, `workers`, and `stalled`
 
 ### Requirement: Error responses are documented
 The system SHALL document the structured error shape produced by the global `HttpExceptionFilter` (`statusCode`, `message`, `error`, `timestamp`, `path`) as `ErrorResponseDto`, referenced by the error responses of the documented operations.
