@@ -125,6 +125,12 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      # NOT secrets: the values below are the committed dev/test defaults from
+      # .env.example / .env.test / docker-compose.yml, and in this job they only
+      # point at the ephemeral postgres/redis service containers on localhost.
+      # Anything actually secret (prod DB URL, API token) must be created under
+      # Settings → Secrets and variables → Actions and referenced as
+      # ${{ secrets.NAME }} — never written inline.
       - name: Apply migrations
         run: npx prisma migrate deploy
         env:
