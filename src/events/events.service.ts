@@ -1,4 +1,4 @@
-import { Injectable, Logger, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus, NotFoundException } from '@nestjs/common';
 import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,6 +7,7 @@ import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';
 import { EventType } from './event-type';
 import { PayloadValidator } from './payload.validator';
+import { EventStatusResponseDto } from './dto/event-status-response.dto';
 
 export interface CreateEventInput {
   eventType: EventType;
@@ -94,6 +95,53 @@ export class EventsService {
     }
 
     return { httpStatus: submitted.status, body: submitted.body };
+  }
+
+  /**
+   * Read-only status query (event-status-api, design D2/D4). Two sequential
+   * reads over existing tables: `payroll_events` by PK, then the append-only
+   * `event_attempts` audit trail (sorted by attempt number at the boundary).
+   *
+   * Never mutates anything. Unknown id → NotFoundException (shaped into the
+   * documented 404 `ErrorResponseDto` by the global filter).
+   */
+  async getEventStatus(id: string): Promise<EventStatusResponseDto> {
+    const row = await this.prisma.payrollEvent.findUnique({ where: { id } });
+    if (!row) {
+      throw new NotFoundException(`Event with id ${id} not found`);
+    }
+
+    const attempts = await this.prisma.eventAttempt.findMany({
+      where: { eventId: id },
+      orderBy: { attemptNumber: 'asc' },
+    });
+
+    // The DTO contract fixes ascending order at the API boundary, independent
+    // of the store's ordering guarantee — one small, robust sort on a short
+    // append-only trail.
+    attempts.sort((a, b) => a.attemptNumber - b.attemptNumber);
+
+    return {
+      id: row.id,
+      eventType: row.eventType,
+      employeeId: row.employeeId,
+      // BigInt is not JSON-serializable — coerce at the API boundary (Number).
+      sequence: Number(row.sequence),
+      status: row.status.toLowerCase() as EventStatusResponseDto['status'],
+      payload: row.payload as Record<string, unknown>,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      processedAt: row.processedAt ? row.processedAt.toISOString() : null,
+      result: row.result ? (row.result as Record<string, unknown>) : null,
+      attempts: attempts.map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        errorType: attempt.errorType,
+        failedReason: attempt.failedReason,
+        result: attempt.result ? (attempt.result as Record<string, unknown>) : null,
+        createdAt: attempt.createdAt.toISOString(),
+      })),
+    };
   }
 
   /**

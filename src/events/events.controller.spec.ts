@@ -1,12 +1,14 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Response } from 'express';
 import { EventsController } from './events.controller';
 import { EventsService, SubmissionResult } from './events.service';
+import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import { EventType } from './event-type';
 
 describe('EventsController', () => {
   let controller: EventsController;
-  const eventsService = { createEvent: jest.fn() };
+  const eventsService = { createEvent: jest.fn(), getEventStatus: jest.fn() };
   const res = { status: jest.fn().mockReturnThis() } as unknown as Response;
 
   beforeEach(async () => {
@@ -57,5 +59,45 @@ describe('EventsController', () => {
     );
 
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  describe('GET /events/:id (event-status-api)', () => {
+    it('returns the service result for the path id', async () => {
+      const status: EventStatusResponseDto = {
+        id: 'evt-1',
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 3,
+        status: 'success',
+        payload: { employeeId: 'emp-1' },
+        createdAt: '2026-08-26T00:40:12.000Z',
+        updatedAt: '2026-08-26T00:40:13.000Z',
+        processedAt: '2026-08-26T00:40:13.000Z',
+        result: { reference: 'SIM-1' },
+        attempts: [
+          {
+            attemptNumber: 1,
+            status: 'SUCCESS',
+            errorType: null,
+            failedReason: null,
+            result: { reference: 'SIM-1' },
+            createdAt: '2026-08-26T00:40:13.000Z',
+          },
+        ],
+      };
+      eventsService.getEventStatus.mockResolvedValue(status);
+
+      const result = await controller.getStatus('evt-1');
+
+      expect(eventsService.getEventStatus).toHaveBeenCalledWith('evt-1');
+      expect(result).toBe(status);
+    });
+
+    it('propagates a service rejection (404 body shape is the global filter’s job)', async () => {
+      const notFound = new NotFoundException('Event with id nope not found');
+      eventsService.getEventStatus.mockRejectedValue(notFound);
+
+      await expect(controller.getStatus('nope')).rejects.toBe(notFound);
+    });
   });
 });

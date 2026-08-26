@@ -1,4 +1,4 @@
-import { HttpStatus } from '@nestjs/common';
+import { HttpStatus, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventsService, CreateEventInput } from './events.service';
 import { PayloadValidator } from './payload.validator';
@@ -17,7 +17,8 @@ describe('EventsService', () => {
     payrollEvent: { create: jest.fn() },
   };
   const prisma = {
-    payrollEvent: { updateMany: jest.fn() },
+    payrollEvent: { updateMany: jest.fn(), findUnique: jest.fn() },
+    eventAttempt: { findMany: jest.fn() },
   };
   const eventQueue = { enqueue: jest.fn() };
   const idempotency = { execute: jest.fn() };
@@ -59,6 +60,8 @@ describe('EventsService', () => {
     tx.payrollEvent.create.mockReset();
     prisma.payrollEvent.updateMany.mockReset();
     prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
+    prisma.payrollEvent.findUnique.mockReset();
+    prisma.eventAttempt.findMany.mockReset();
     eventQueue.enqueue.mockReset();
     eventQueue.enqueue.mockResolvedValue(undefined);
   });
@@ -191,6 +194,118 @@ describe('EventsService', () => {
       expect(result.body).toEqual({ id: 'evt-2', status: 'received' });
       expect(eventQueue.enqueue).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getEventStatus (read-only, event-status-api)', () => {
+    // Faithful committed SUCCESS row as Prisma would return it.
+    const row = {
+      id: 'evt-1',
+      eventType: 'BANK_ACCOUNT_CHANGE',
+      employeeId: 'emp-1',
+      payload: { employeeId: 'emp-1', effectiveDate: '2026-09-01', iban: 'DE89370400440532013000' },
+      sequence: 3n,
+      idempotencyKey: 'k-1',
+      status: 'SUCCESS',
+      createdAt: new Date('2026-08-26T00:40:12.000Z'),
+      updatedAt: new Date('2026-08-26T00:40:13.000Z'),
+      processedAt: new Date('2026-08-26T00:40:13.000Z'),
+      result: { reference: 'SIM-1' },
+    };
+
+    it('throws NotFoundException for an unknown id and does not query attempts', async () => {
+      prisma.payrollEvent.findUnique.mockResolvedValue(null);
+
+      await expect(service.getEventStatus('missing')).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.payrollEvent.findUnique).toHaveBeenCalledWith({ where: { id: 'missing' } });
+      expect(prisma.eventAttempt.findMany).not.toHaveBeenCalled();
+    });
+
+    it('maps the row (BigInt→number, dates→ISO, null passthrough) and orders attempts ascending', async () => {
+      prisma.payrollEvent.findUnique.mockResolvedValue({
+        ...row,
+        processedAt: null,
+        result: null,
+        status: 'QUEUED',
+      });
+      prisma.eventAttempt.findMany.mockResolvedValue([
+        {
+          id: 'a2',
+          eventId: 'evt-1',
+          attemptNumber: 2,
+          status: 'FAILED',
+          errorType: 'TEMPORARY',
+          failedReason: 'flaky provider',
+          result: null,
+          createdAt: new Date('2026-08-26T00:40:14.000Z'),
+        },
+        {
+          id: 'a1',
+          eventId: 'evt-1',
+          attemptNumber: 1,
+          status: 'SUCCESS',
+          errorType: null,
+          failedReason: null,
+          result: { reference: 'SIM-1' },
+          createdAt: new Date('2026-08-26T00:40:13.000Z'),
+        },
+      ]);
+
+      const result = await service.getEventStatus('evt-1');
+
+      expect(prisma.eventAttempt.findMany).toHaveBeenCalledWith({
+        where: { eventId: 'evt-1' },
+        orderBy: { attemptNumber: 'asc' },
+      });
+      // The mock returns the trail out of order; the service must re-sort so the
+      // DTO contract (ascending attemptNumber) holds regardless of store order.
+      expect(result).toEqual({
+        id: 'evt-1',
+        eventType: 'BANK_ACCOUNT_CHANGE',
+        employeeId: 'emp-1',
+        sequence: 3, // BigInt coerced to Number — never leaks raw BigInt
+        status: 'queued', // enum lowercased to the documented wire format
+        payload: { employeeId: 'emp-1', effectiveDate: '2026-09-01', iban: 'DE89370400440532013000' },
+        createdAt: '2026-08-26T00:40:12.000Z',
+        updatedAt: '2026-08-26T00:40:13.000Z',
+        processedAt: null,
+        result: null,
+        attempts: [
+          {
+            attemptNumber: 1,
+            status: 'SUCCESS',
+            errorType: null,
+            failedReason: null,
+            result: { reference: 'SIM-1' },
+            createdAt: '2026-08-26T00:40:13.000Z',
+          },
+          {
+            attemptNumber: 2,
+            status: 'FAILED',
+            errorType: 'TEMPORARY',
+            failedReason: 'flaky provider',
+            result: null,
+            createdAt: '2026-08-26T00:40:14.000Z',
+          },
+        ],
+      });
+    });
+
+    it('produces a strictly JSON-serializable object (no BigInt, no raw Date)', async () => {
+      prisma.payrollEvent.findUnique.mockResolvedValue(row);
+      prisma.eventAttempt.findMany.mockResolvedValue([]);
+
+      const result = await service.getEventStatus('evt-1');
+      const roundTripped = JSON.parse(JSON.stringify(result));
+
+      expect(roundTripped).toEqual({
+        ...result,
+        sequence: 3,
+        createdAt: '2026-08-26T00:40:12.000Z',
+        updatedAt: '2026-08-26T00:40:13.000Z',
+        processedAt: '2026-08-26T00:40:13.000Z',
+      });
+      expect(roundTripped.attempts).toEqual([]);
     });
   });
 });

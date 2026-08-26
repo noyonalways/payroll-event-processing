@@ -1,5 +1,22 @@
-import { Body, Controller, HttpCode, Post, Res } from '@nestjs/common';
-import { ApiBody, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Res,
+} from '@nestjs/common';
+import {
+  ApiBody,
+  ApiHeader,
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Response } from 'express';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { IdempotencyKey } from '../common/idempotency/idempotency-key.decorator';
@@ -7,6 +24,7 @@ import { IDEMPOTENCY_HEADER } from '../common/idempotency/idempotency.constants'
 import { CreateEventDto } from './dto/create-event.dto';
 import { EVENT_EXAMPLES } from './dto/event-examples';
 import { EventSubmissionResponseDto } from './dto/event-submission-response.dto';
+import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import { EventsService } from './events.service';
 
 @ApiTags('events')
@@ -60,5 +78,35 @@ export class EventsController {
     // Return the stored response exactly (same status + body on duplicates).
     res.status(result.httpStatus);
     return result.body;
+  }
+
+  /**
+   * GET /events/:id — read-only event status (event-status-api). Returns the
+   * event's current committed lifecycle state, its details, and the terminal
+   * attempt history. Unknown id → 404 (shaped by the global filter into the
+   * documented ErrorResponseDto). No Idempotency-Key required — pure read.
+   */
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Get a payroll event status',
+    description:
+      'Read-only: returns the event lifecycle state, its details, and the terminal ' +
+      'attempt history. 404 when no event matches the id. No Idempotency-Key required.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Event identifier (UUID)',
+    example: 'f3c6df52-9d13-4d7b-a2d1-9f8d4c2c8a9b',
+  })
+  @ApiOkResponse({
+    description: 'Event status retrieved',
+    type: EventStatusResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'No event matches the id',
+    type: ErrorResponseDto,
+  })
+  async getStatus(@Param('id') id: string): Promise<EventStatusResponseDto> {
+    return this.eventsService.getEventStatus(id);
   }
 }

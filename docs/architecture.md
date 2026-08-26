@@ -4,6 +4,9 @@
 > Change 7 (`concurrency-and-crash-recovery`) is shipped: transactional row-locked
 > processing, `event_attempts`/`worker_heartbeats` tables, BullMQ stalled-job
 > recovery settings, and worker liveness in `/health`.
+> Change 8 (`event-status-api`) is shipping the read-only status surface:
+> `GET /events/:id` returns the committed lifecycle state + terminal attempt
+> trail (404 `ErrorResponseDto` on an unknown id).
 > **Scope:** Full-system architecture + visual flows (roadmap changes 2–11).
 > **Related:** eraser.io Draft file contains the diagrams that illustrate this document.
 
@@ -41,9 +44,9 @@ See the **System Architecture** diagram in eraser.io. In prose:
                     ┌────────────────────────────────────────────┐
    Browser ────────►│  NestJS API :3000                          │
    (React/Vite)     │  EventsController (POST /events,         │
-                    │    GET /events, GET /events/:id/history)   │
+                    │    GET /events/:id — read-only status)     │
                     │  EventsService: validate → dedupe →        │
-                    │    persist → enqueue                       │
+                    │    persist → enqueue → status read         │
                     └───────┬─────────────────▲──────────────────┘
                             │ Prisma          │ 201 { id, status }
                  ┌──────────▼──────────┐   ┌──┴──────────────┐
@@ -235,6 +238,26 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 6. **Retries exhausted** (transient) → `onFailed` array `$transaction` commits `[queued → failed + attempt → FAILED(TEMPORARY, reason)]`, audit row recording the final attempt number.
 7. **Crash anywhere** between lock and commit → the transaction aborts → the row is back in `queued` (never stuck in `processing`); BullMQ stalled-job detection additionally re-queues a job whose worker died mid-work, and a fresh worker reprocesses safely thanks to the guarded claim + terminal status guard.
 
+### 7.3 Read-only status (`GET /events/:id`, event-status-api)
+
+The status endpoint is a READ-ONLY pair of sequential reads — no `Idempotency-Key`,
+no mutation.
+
+1. Client → `GET /events/:id`. Unknown id → `NotFoundException`, shaped by the global
+   `HttpExceptionFilter` into the documented 404 `ErrorResponseDto`.
+2. `event_attempts` trail fetched `WHERE eventId = :id ORDER BY attemptNumber ASC`
+   and re-sorted at the boundary — the response's `attempts[]` is always ascending
+   regardless of store order.
+3. Response `200 EventStatusResponseDto`: committed `status` (lowercase wire format:
+   `received`|`queued`|`processing`|`success`|`failed`), event details, `sequence`
+   coerced `BigInt → Number` (never a raw BigInt on the wire), `processedAt`/`result`
+   on `success`, null otherwise, and one `EventAttemptDto` per terminal attempt with
+   `attemptNumber`/`status`/`errorType`/`failedReason`/`result`/`createdAt`.
+
+The reported `status` always mirrors the committed `payroll_events` row: because the
+claim is rolled back on any abort, polling between BullMQ retry attempts observes
+`queued` with an empty attempt trail — never a stuck `processing`.
+
 ## 8. Failure modes & recovery
 
 | Failure | Observable effect | Recovery |
@@ -258,7 +281,7 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
 | 5 `retry-and-failure-strategy` | temp vs perm, backoff, dead-letter |
 | 6 `idempotency-layer` | required Idempotency-Key, dedupe |
 | 7 `concurrency-and-crash-recovery` ✅ | row lock + transactional claim/terminal commit, event_attempts audit, stalled-job recovery config, worker heartbeats + /health liveness |
-| 8 `event-status-api` | GET /events, GET /events/:id/history |
+| 8 `event-status-api` ✅ | GET /events/:id — read-only status + terminal attempt trail (remaining roadmap: GET /events list, GET /events/:id/history) |
 | 9 `minimal-frontend` | demo UI (submit / live status) |
 | 10 `test-suite` | unit/integration/e2e incl. recovery test |
 | 11 `ci-and-docs` | CI, final diagram — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
