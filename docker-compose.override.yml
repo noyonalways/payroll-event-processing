@@ -7,7 +7,11 @@ services:
       - /app/node_modules
     environment:
       NODE_ENV: development
-    command: npm run dev
+    # Dev mode must ALSO apply pending migrations before starting — on a fresh
+    # (empty) Postgres volume the tables would otherwise never be created.
+    # prisma migrate deploy is concurrency-safe (advisory lock), so api and
+    # worker running it together at startup is fine.
+    command: ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec npm run dev"]
 
   worker:
     build:
@@ -17,4 +21,4 @@ services:
       - /app/node_modules
     environment:
       NODE_ENV: development
-    command: npm run dev:worker
+    command: ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec npm run dev:worker"]
