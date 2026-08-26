@@ -269,6 +269,7 @@ claim is rolled back on any abort, polling between BullMQ retry attempts observe
 | Duplicate submit race (concurrent) | unique constraint violation | caught → treated as duplicate |
 | Two workers same event | both claim same job row | `FOR UPDATE` row lock + guarded claim → only one proceeds |
 | Invalid payload | — | `400` at submission, nothing persisted |
+| Demo scenario id (`EMP-DEMO-*`, see `src/processing/demo-scenarios.ts`) | forced outcome per submission: success, `failed`/`PERMANENT` (attempt 1), transient retries → `failed`/`TEMPORARY` (final attempt), or transient-then-success (attempt 3) | deterministic override, wins over `PAYROLL_FAILURE_MODE`; reviewer lever for the demo UI — no persistence change (terminal-only attempt rows unchanged) |
 
 ## 9. Mapping to the roadmap
 

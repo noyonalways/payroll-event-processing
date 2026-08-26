@@ -14,10 +14,16 @@ import { Button } from '@/components/ui/button';
 import { ApiError, NetworkError, submitEvent } from '../api/events';
 import {
   buildPayload,
-  defaultValuesFor,
   fieldsFor,
   validateValues,
 } from '../lib/eventTypes';
+import {
+  DEFAULT_SCENARIO_ID,
+  DEMO_SCENARIOS,
+  nextValues,
+  scenarioById,
+} from '../lib/scenarios';
+import type { DemoScenarioId } from '../lib/scenarios';
 import type { RecordSubmissionInput } from '../lib/useEventTracker';
 import { EVENT_TYPES } from '../lib/types';
 import type { EventSubmissionResponse, EventType } from '../lib/types';
@@ -39,8 +45,9 @@ export interface SubmitFormProps {
  */
 export function SubmitForm({ onSubmitted }: SubmitFormProps) {
   const [eventType, setEventType] = useState<EventType>('BANK_ACCOUNT_CHANGE');
+  const [scenario, setScenario] = useState<DemoScenarioId>(DEFAULT_SCENARIO_ID);
   const [values, setValues] = useState<Record<string, string>>(() =>
-    defaultValuesFor('BANK_ACCOUNT_CHANGE'),
+    nextValues('BANK_ACCOUNT_CHANGE', DEFAULT_SCENARIO_ID),
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [apiError, setApiError] = useState<string | null>(null);
@@ -61,7 +68,7 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
   }
 
   function handleReset() {
-    setValues(defaultValuesFor(eventType));
+    setValues(nextValues(eventType, scenario));
     setErrors({});
     setApiError(null);
     setLastResult(null);
@@ -74,7 +81,20 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
       ? (value as EventType)
       : 'BANK_ACCOUNT_CHANGE';
     setEventType(next);
-    setValues(defaultValuesFor(next));
+    setValues(nextValues(next, scenario));
+    setErrors({});
+    setApiError(null);
+    setLastResult(null);
+  }
+
+  function handleScenarioChange(value: string) {
+    // The select is built from DEMO_SCENARIOS, so the string is always a valid
+    // DemoScenarioId; defaulting keeps the invariant even if it somehow isn't.
+    const next = DEMO_SCENARIOS.some((s) => s.id === value)
+      ? (value as DemoScenarioId)
+      : DEFAULT_SCENARIO_ID;
+    setScenario(next);
+    setValues(nextValues(eventType, next));
     setErrors({});
     setApiError(null);
     setLastResult(null);
@@ -96,8 +116,9 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
       const { response } = await submitEvent({ eventType, payload }, idempotencyKey);
       setLastResult(response);
       // Back to a ready-to-submit state: the next event can be submitted
-      // immediately, and changing one or two fields is a trivial tweak.
-      setValues(defaultValuesFor(eventType));
+      // immediately, and changing one or two fields is a trivial tweak. The
+      // demo scenario is preserved so repeated runs demo the same case.
+      setValues(nextValues(eventType, scenario));
       onSubmitted({
         id: response.id,
         eventType,
@@ -124,8 +145,8 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
         <div className="min-w-0">
           <h2 className="text-lg font-semibold tracking-tight">Submit an event</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Pre-filled sample values — tweak any field, then submit. A
-            structured 400 from the API is surfaced inline.
+            Pre-filled sample values — pick a demo scenario, tweak a field, then
+            submit. A structured 400 from the API is surfaced inline.
           </p>
           {lastResult && (
             <p className="mt-1.5 truncate text-xs text-emerald-700 dark:text-emerald-300">
@@ -174,6 +195,31 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="mt-3">
+        <span className="px-1 text-sm font-medium text-foreground">
+          Demo scenario
+        </span>
+        <Select value={scenario} onValueChange={handleScenarioChange}>
+          <SelectTrigger data-testid="scenario-trigger" className="mt-1.5">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DEMO_SCENARIOS.map((demo) => (
+              <SelectItem
+                key={demo.id}
+                value={demo.id}
+                data-testid={`scenario-option-${demo.id}`}
+              >
+                {demo.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="mt-1.5 px-1 text-xs text-muted-foreground">
+          {scenarioById(scenario).description}
+        </p>
       </div>
 
       {fieldsFor(eventType).map((spec) => {

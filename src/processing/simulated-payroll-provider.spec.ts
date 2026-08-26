@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { demoScenarioFor } from './demo-scenarios';
 import {
   FailureConfig,
   PayrollFailureMode,
@@ -111,6 +112,69 @@ describe('SimulatedPayrollProvider', () => {
       expect(config.temporaryFailureRate).toBe(0.25);
       expect(config.permanentFailureRate).toBe(0.05);
       expect(config.mode).toBe('random');
+    });
+  });
+
+  describe('demo scenario ids (EMP-DEMO-*)', () => {
+    describe('demoScenarioFor', () => {
+      it('maps each reserved id to its scenario', () => {
+        expect(demoScenarioFor('EMP-DEMO-SUCCESS')).toBe('SUCCESS');
+        expect(demoScenarioFor('EMP-DEMO-RECOVER')).toBe('RECOVER');
+        expect(demoScenarioFor('EMP-DEMO-TRANSIENT')).toBe('TRANSIENT');
+        expect(demoScenarioFor('EMP-DEMO-PERMANENT')).toBe('PERMANENT');
+      });
+
+      it('matches case-insensitively and trims surrounding whitespace', () => {
+        expect(demoScenarioFor('  emP-dEmO-sUcCeSs  ')).toBe('SUCCESS');
+      });
+
+      it('returns null for unknown candidates (falls through to random)', () => {
+        expect(demoScenarioFor('EMP-DEMO-BOGUS')).toBeNull();
+        expect(demoScenarioFor('EMP-DEMO-')).toBeNull();
+        expect(demoScenarioFor('EMP-001')).toBeNull();
+        expect(demoScenarioFor(undefined)).toBeNull();
+        expect(demoScenarioFor(null)).toBeNull();
+      });
+    });
+
+    // simulate()-level integration: the demo lever must win over the env mode
+    // switch. Each demo call sleeps ~1 s (pacing), so only a handful of these.
+    it('EMP-DEMO-SUCCESS resolves with a reference even under always-transient', async () => {
+      const p = provider('always-transient');
+      const result = await p.simulate({ employeeId: 'EMP-DEMO-SUCCESS' });
+      expect(result.reference).toMatch(/^SIM-/);
+    });
+
+    it('EMP-DEMO-PERMANENT rejects permanently even under always-success', async () => {
+      const p = provider('always-success');
+      await expect(
+        p.simulate({ employeeId: 'EMP-DEMO-PERMANENT', attempt: 1 }),
+      ).rejects.toMatchObject({ isTransient: false });
+    });
+
+    it('EMP-DEMO-TRANSIENT always throws a transient failure', async () => {
+      const p = provider('always-success');
+      await expect(
+        p.simulate({ employeeId: 'EMP-DEMO-TRANSIENT', attempt: 1 }),
+      ).rejects.toMatchObject({ isTransient: true });
+    });
+
+    it('EMP-DEMO-RECOVER fails before the attempt threshold and succeeds from it', async () => {
+      const p = provider('always-permanent'); // env mode cannot win over the demo id
+      await expect(
+        p.simulate({ employeeId: 'EMP-DEMO-RECOVER', attempt: 1 }),
+      ).rejects.toMatchObject({ isTransient: true });
+      await expect(
+        (await p.simulate({ employeeId: 'EMP-DEMO-RECOVER', attempt: 3 }))
+          .reference,
+      ).toMatch(/^SIM-/);
+    });
+
+    it('a non-demo id still follows the env failure mode', async () => {
+      const p = provider('always-transient');
+      await expect(
+        p.simulate({ employeeId: 'EMP-001', attempt: 1 }),
+      ).rejects.toMatchObject({ isTransient: true });
     });
   });
 });

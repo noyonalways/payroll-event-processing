@@ -16,7 +16,10 @@ export class SalaryChangeHandler implements PayrollEventStrategy {
 
   async handle(input: HandlerInput): Promise<ProcessingResult> {
     const payload = input.payload as unknown as SalaryChangePayload;
-    const { reference } = await this.provider.simulate();
+    const { reference } = await this.provider.simulate({
+      employeeId: input.employeeId,
+      attempt: input.attempt,
+    });
     return {
       reference,
       employeeId: input.employeeId,

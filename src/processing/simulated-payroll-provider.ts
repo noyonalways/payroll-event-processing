@@ -2,6 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import {
+  DEMO_PACING_MAX_MS,
+  DEMO_PACING_MIN_MS,
+  DEMO_RECOVER_THRESHOLD_ATTEMPT,
+  demoScenarioFor,
+} from './demo-scenarios';
+import {
   PermanentPayrollFailureError,
   TransientPayrollFailureError,
 } from './errors/payroll-processing.error';
@@ -83,6 +89,20 @@ export interface SimulatedCallResult {
 }
 
 /**
+ * Context for one simulated call. The processing handlers pass the payload
+ * employee id and the 1-based attempt number so the reserved `EMP-DEMO-*` demo
+ * levers can force deterministic outcomes (see `demo-scenarios.ts`). Both are
+ * optional: a bare `simulate()` keeps the original random/env-mode behavior,
+ * which is what the low-level unit tests rely on.
+ */
+export interface SimulateContext {
+  /** Payload employee id — a reserved `EMP-DEMO-*` id forces the outcome. */
+  employeeId?: string;
+  /** 1-based processing attempt number (drives the RECOVER threshold). */
+  attempt?: number;
+}
+
+/**
  * Simulated external payroll operation. One `simulate()` call models the full
  * round-trip: it either throws a transient/permanent failure at the configured
  * probability (honoring the deterministic override) or returns a success
@@ -92,9 +112,41 @@ export interface SimulatedCallResult {
 export class SimulatedPayrollProvider {
   constructor(private readonly config: FailureConfig) {}
 
-  async simulate(): Promise<SimulatedCallResult> {
-    // Simulated network/business latency so the call behaves like an external one.
-    await new Promise((resolve) => setTimeout(resolve, this.latencyMs()));
+  async simulate(context: SimulateContext = {}): Promise<SimulatedCallResult> {
+    const scenario = demoScenarioFor(context.employeeId);
+
+    // Demo ids run with visible pacing so the UI's poll observes queued /
+    // processing states between retries; the regular path stays at 10–50 ms.
+    await new Promise((resolve) =>
+      setTimeout(resolve, scenario ? this.demoPacingMs() : this.latencyMs()),
+    );
+
+    // A reserved `EMP-DEMO-*` id forces its outcome and wins over the
+    // env-mode switch below (so a reviewer can demo every case regardless of
+    // PAYROLL_FAILURE_MODE). RECOVER falls through to the success return once
+    // the attempt is at or past the threshold.
+    if (scenario !== null) {
+      switch (scenario) {
+        case 'TRANSIENT':
+          throw new TransientPayrollFailureError(
+            'Simulated payroll service unavailable (demo scenario: transient failure)',
+          );
+        case 'PERMANENT':
+          throw new PermanentPayrollFailureError(
+            'Simulated payroll service rejected the change (demo scenario: permanent failure)',
+          );
+        case 'RECOVER':
+          if ((context.attempt ?? 1) < DEMO_RECOVER_THRESHOLD_ATTEMPT) {
+            throw new TransientPayrollFailureError(
+              'Simulated payroll service unavailable (demo scenario: recoverable, failing attempt)',
+            );
+          }
+          break;
+        case 'SUCCESS':
+          break;
+      }
+      return { reference: `SIM-${randomUUID()}` };
+    }
 
     switch (this.config.mode) {
       case 'always-transient':
@@ -136,5 +188,15 @@ export class SimulatedPayrollProvider {
 
   private latencyMs(): number {
     return 10 + Math.floor(Math.random() * 40); // 10–50 ms
+  }
+
+  /** Simulated external-call pacing for demo ids (900–1400 ms). */
+  private demoPacingMs(): number {
+    return (
+      DEMO_PACING_MIN_MS +
+      Math.floor(
+        Math.random() * (DEMO_PACING_MAX_MS - DEMO_PACING_MIN_MS + 1),
+      )
+    );
   }
 }

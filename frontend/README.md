@@ -20,6 +20,24 @@ a detail panel showing the processing result and the failure trail (retries,
 - **Event detail** — select a row to inspect the payload, timestamps, handler
   result, and the full append-only attempt trail.
 
+### Demo scenarios
+
+The submit form has a **Demo scenario** select that pre-fills the reserved
+`EMP-DEMO-*` employee id, deterministically forcing that submission's outcome
+server-side (see `src/processing/demo-scenarios.ts` — the lever wins over
+`PAYROLL_FAILURE_MODE`). Each option shows what to watch for.
+
+| Scenario | Reserved employee id | What a reviewer sees |
+| --- | --- | --- |
+| Success (default) | `EMP-DEMO-SUCCESS` | `received → success`, one `SUCCESS` attempt row at 1 |
+| Retry, then recover | `EMP-DEMO-RECOVER` | two transient attempts with backoff (list stays `queued`), then `SUCCESS` at attempt 3 |
+| Retry, then exhausted | `EMP-DEMO-TRANSIENT` | ~20 s of retries, then `FAILED` / `TEMPORARY` at the final attempt (default: 5) |
+| Permanent failure | `EMP-DEMO-PERMANENT` | `FAILED` / `PERMANENT` at attempt 1, no retry |
+| Random (env mode) | `EMP-001` | normal path — outcome follows `PAYROLL_FAILURE_MODE` and the failure rates |
+
+The scenario is preserved across event-type changes, resets, and post-submit
+re-fills, so repeated submits keep demonstrating the same case.
+
 ## Run it
 
 ```bash
