@@ -144,6 +144,10 @@ Tear everything down with `docker compose down` (add `-v` to also drop the `pgda
 | **Simulated provider** (`src/processing/`) | Fake external payroll call with env-tunable transient/permanent failure rates; deterministic `EMP-DEMO-*` scenarios for review demos. |
 | **Demo UI** (`frontend/`) | React + Vite two-pane app: submit an event, watch it progress through live polling, inspect detail + failure trail. |
 
+Interactive diagrams (ERD, event flow, lifecycle state machine, system architecture) are
+hosted on **Eraser**: <https://app.eraser.io/workspace/hIaUa8ZhdcDwT5YtdUiI>. Visual-only —
+the prose below and **`docs/architecture.md`** stay the source of truth.
+
 The full design narrative — the seven reliability requirements mapped to enforcement points,
 sequence flows, and every decision record — lives in **`docs/architecture.md`**.
 

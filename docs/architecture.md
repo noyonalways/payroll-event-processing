@@ -15,7 +15,9 @@
 > - Change 11 (`ci-and-docs`) ✅ — `.github/workflows/ci.yml`, README, this document.
 >
 > **Scope:** Full-system architecture + visual flows (roadmap changes 2–11).
-> **Related:** eraser.io Draft file contains the diagrams that illustrate this document.
+> **Related:** The diagrams that illustrate this document (ERD, event flow, lifecycle
+> state machine, system architecture) are on **Eraser**:
+> <https://app.eraser.io/workspace/hIaUa8ZhdcDwT5YtdUiI>.
 
 ---
 
