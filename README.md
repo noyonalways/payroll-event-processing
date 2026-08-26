@@ -67,9 +67,14 @@ Event lifecycle: `received → queued → processing → success | failed` (with
 
 ## Quick start (Docker)
 
-The one-command path. Requires Docker + Docker Compose.
+Requires Docker + Docker Compose.
 
 ```bash
+# The api/worker services read .env.development as their env_file, and it is
+# gitignored — create it from the template before the first run.
+cp .env.example .env.development
+#   PowerShell: Copy-Item .env.example .env.development
+
 docker compose up --build
 ```
 
