@@ -30,4 +30,4 @@ COPY --from=build /app/package*.json ./
 COPY --from=build /app/prisma ./prisma
 USER node
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "dist/apps/worker/main"]
+CMD ["node", "dist/apps/worker/src/main"]
