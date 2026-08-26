@@ -74,7 +74,7 @@ export class PayrollEventQueueService implements OnModuleDestroy {
       removeOnFail: true,
     });
 
-    this.logger.debug(
+    this.logger.verbose(
       `Enqueued ${input.eventType} event ${input.eventId} for employee ` +
         `${input.employeeId} (seq ${input.sequence})` +
         (job ? ` — job ${job.id}` : ' — suppressed (job already present)'),

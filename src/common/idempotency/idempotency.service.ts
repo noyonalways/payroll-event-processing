@@ -121,7 +121,10 @@ export class IdempotencyService {
 
   /**
    * Structured observability: scope, key, outcome, and the returned HTTP status.
-   * Keys are logged; payloads and response bodies are never logged.
+   * Keys are logged; payloads and response bodies are never logged. Serialized
+   * to a single-line JSON string so one decision is one log line — passing an
+   * object makes Nest's util.inspect print a multi-line `Object(4) {…}` that
+   * interleaves with the worker's own output.
    */
   private logDecision(
     scope: string,
@@ -129,7 +132,7 @@ export class IdempotencyService {
     outcome: IdempotencyOutcome,
     httpStatus: number,
   ): void {
-    const line = { scope, key, outcome, httpStatus };
+    const line = JSON.stringify({ scope, key, outcome, httpStatus });
     if (outcome === 'expired') {
       this.logger.warn(line);
     } else {

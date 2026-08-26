@@ -252,7 +252,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
         return;
       }
 
-      this.logger.debug(
+      this.logger.verbose(
         `Relaying next ${next.eventType} event ${next.id} (seq ${next.sequence}) for employee ${employeeId}`,
       );
 

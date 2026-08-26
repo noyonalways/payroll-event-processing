@@ -4,6 +4,8 @@ Backend Engineering Technical Assignment — a production-oriented, reliable **a
 
 Built with **NestJS + TypeScript + PostgreSQL + Redis + BullMQ + Docker + GitHub Actions**.
 
+[![CI](https://github.com/noyonalways/payroll-event-processing/actions/workflows/ci.yml/badge.svg)](https://github.com/noyonalways/payroll-event-processing/actions/workflows/ci.yml)
+
 > ⚠️ **Status: scaffold / work-in-progress.** This repository currently contains the project skeleton and folder structure. Implementation is coming feature-by-feature via OpenSpec-style small, reviewable changes.
 
 ---

@@ -1,0 +1,142 @@
+# CI pipeline for the payroll event-processing service.
+#
+# Gates for every push to `main` and every pull request into it:
+#   backend  — ESLint, unit tests (Jest), `nest build`
+#   frontend — oxlint, Vitest, `tsc -b` + Vite build
+#   e2e      — full-stack suites (event submission, queue, processing, retries,
+#              idempotency, health, status) against real Postgres + Redis with
+#              the in-process worker. Postgres/Redis run as service containers;
+#              NO api/worker containers are started, so there is no second
+#              worker racing the in-process consumer (the local known race).
+#
+# All checks must pass before anything merges (configure branch protection to
+# require all three). Running the same commands a reviewer would run locally:
+# the Dockerfiles ship node:20-alpine, so CI pins Node 20.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — lint · unit · build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: ESLint
+        run: npm run lint:check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  frontend:
+    name: Frontend — lint · vitest · build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Oxlint
+        run: npm run lint
+
+      - name: Unit tests (Vitest)
+        run: npm run test:run
+
+      - name: Build
+        run: npm run build
+
+  e2e:
+    name: E2E — Postgres + Redis, in-process worker
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: payroll
+          POSTGRES_PASSWORD: payroll
+          POSTGRES_DB: payroll
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U payroll -d payroll"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://payroll:payroll@localhost:5432/payroll?schema=public
+
+      # The e2e suites boot the Nest app in-process (ts-jest) against the
+      # service containers. No `.env.test` exists here, so the variables the
+      # app's ConfigModule + Prisma client need are exported directly; the rest
+      # (failure rates, worker timings, retry defaults) come from Joi defaults.
+      - name: E2E tests
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://payroll:payroll@localhost:5432/payroll?schema=public
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
