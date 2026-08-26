@@ -1,12 +1,19 @@
-# Payroll Event Processing — Architecture & Reliability Proposal
+# Payroll Event Processing — Architecture & Reliability
 
-> **Status:** Living proposal — reliability decisions now match the implemented code.
-> Change 7 (`concurrency-and-crash-recovery`) is shipped: transactional row-locked
-> processing, `event_attempts`/`worker_heartbeats` tables, BullMQ stalled-job
-> recovery settings, and worker liveness in `/health`.
-> Change 8 (`event-status-api`) is shipping the read-only status surface:
-> `GET /events/:id` returns the committed lifecycle state + terminal attempt
-> trail (404 `ErrorResponseDto` on an unknown id).
+> **Status:** Implemented — all roadmap changes 2–11 are shipped and the CI pipeline
+> (backend lint/unit/build, frontend lint/vitest/build, full e2e against real
+> Postgres + Redis service containers) is green on `main`.
+>
+> - Change 7 (`concurrency-and-crash-recovery`) ✅ — transactional row-locked
+>   processing, `event_attempts`/`worker_heartbeats` tables, BullMQ stalled-job
+>   recovery settings, worker liveness in `/health`.
+> - Change 8 (`event-status-api`) ✅ — read-only `GET /events/:id` status + terminal
+>   attempt trail (404 `ErrorResponseDto` on an unknown id).
+> - Change 9 (`minimal-frontend`) ✅ — React/Vite demo UI with the `EMP-DEMO-*`
+>   scenario lever (see `src/processing/demo-scenarios.ts`).
+> - Change 10 (`test-suite`) ✅ — 111 backend unit tests, 40 e2e, 52 frontend.
+> - Change 11 (`ci-and-docs`) ✅ — `.github/workflows/ci.yml`, README, this document.
+>
 > **Scope:** Full-system architecture + visual flows (roadmap changes 2–11).
 > **Related:** eraser.io Draft file contains the diagrams that illustrate this document.
 
@@ -117,7 +124,7 @@ Each requirement mapped to its enforcement point.
 - **Temporary** (provider down, timeout, 5xx): retried with exponential backoff; attempt `error_type=TEMPORARY`.
 - **Permanent** (business/validation error surfaced by provider): event → `failed`, `failedReason` recorded, **never retried** (dead-letter).
 - Simulated via env-tunable probabilities so both paths are testable (`PAYROLL_TEMPORARY_FAILURE_RATE=0.25`, `PAYROLL_PERMANENT_FAILURE_RATE=0.05`).
-- **Enforced in:** worker `RetryStrategy` + BullMQ `attempts`/`backoff` config; `event_attempts.error_type`.
+- **Enforced in:** BullMQ `attempts`/`backoff` config (set by the producer, `payroll-event-queue.service.ts`) + the worker's transient-error **re-throw** (`payroll-event.processor.ts`); `event_attempts.error_type`.
 
 ### R2 — Idempotency (no duplicate business effects)
 - Client sends a required `Idempotency-Key` header.
@@ -276,16 +283,16 @@ claim is rolled back on any abort, polling between BullMQ retry attempts observe
 | Roadmap change | Delivers |
 |---|---|
 | 1 `project-scaffold` ✅ | runnable baseline (done) |
-| 2 `event-submission-api` | DTOs/validation, `payroll_events` schema, POST /events |
-| 3 `bullmq-queue-integration` | producer + worker, per-employee FIFO |
-| 4 `simulated-payroll-processor` | handler registry, simulated provider, attempt logging |
-| 5 `retry-and-failure-strategy` | temp vs perm, backoff, dead-letter |
-| 6 `idempotency-layer` | required Idempotency-Key, dedupe |
+| 2 `event-submission-api` ✅ | DTOs/validation, `payroll_events` schema, POST /events |
+| 3 `bullmq-queue-integration` ✅ | producer + worker, per-employee FIFO |
+| 4 `simulated-payroll-processor` ✅ | handler registry, simulated provider, `EMP-DEMO-*` scenarios |
+| 5 `retry-and-failure-strategy` ✅ | temp vs perm, backoff, dead-letter |
+| 6 `idempotency-layer` ✅ | required Idempotency-Key, dedupe |
 | 7 `concurrency-and-crash-recovery` ✅ | row lock + transactional claim/terminal commit, event_attempts audit, stalled-job recovery config, worker heartbeats + /health liveness |
 | 8 `event-status-api` ✅ | GET /events/:id — read-only status + terminal attempt trail (remaining roadmap: GET /events list, GET /events/:id/history) |
-| 9 `minimal-frontend` | demo UI (submit / live status) |
-| 10 `test-suite` | unit/integration/e2e incl. recovery test |
-| 11 `ci-and-docs` | CI, final diagram — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
+| 9 `minimal-frontend` ✅ | demo UI (submit / live status / detail) with scenario selector |
+| 10 `test-suite` ✅ | unit + e2e incl. recovery + frontend Vitest (111 / 40 / 52 tests) |
+| 11 `ci-and-docs` ✅ | `.github/workflows/ci.yml` (backend + frontend + e2e jobs), README + this doc — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
 
 ## 10. Decisions (closed — implementation-ready)
 
@@ -298,11 +305,10 @@ Required `Idempotency-Key` header; dedup is enforced by `UNIQUE (scope, key)` on
 The shared idempotency layer keeps one row per `(scope, key)` holding `response_status` + `response_body`, written in the **same insert transaction** as the business row. Duplicate/key-reuse submits read that row and return exactly the stored response; records expire (`IDEMPOTENCY_TTL_SECONDS`) and are swept (`IDEMPOTENCY_SWEEP_INTERVAL_MS`), and an expired key becomes reusable.
 **Why:** the DB is already the dedup arbiter via `UNIQUE (scope, key)`, so correctness never depends on a TTL'd cache; a Redis cache would only add eviction + coherence failure modes. The separate table keeps the dedup state independent of the business row and is generic across scopes. This supercedes the earlier design that stored the response on the `payroll_events` row (columns removed in the `idempotency_records` migration).
 
-### D3 — Retry bounds: `maxAttempts = 5`, exponential backoff 1 s base + 50 % jitter, all env-config
-BullMQ: `attempts: 5` (1 initial + 4 retries), `backoff: { type: 'exponential', delay: 1000, jitter: 0.5 }` → delays ≈ 1/2/4/8 s with ±50 % jitter.
-Env vars: `PAYROLL_MAX_ATTEMPTS` (5), `PAYROLL_RETRY_BASE_DELAY_MS` (1000), `PAYROLL_RETRY_JITTER` (0.5).
-Permanent errors are thrown **non-retryable**, so the job fails immediately and the DB is the dead-letter (`status='failed'` + `error_type='PERMANENT'` + `failedReason`). Set `removeOnComplete`/`removeOnFail` so Redis stays bounded — the audit trail lives in Postgres, not Redis.
-(Verified: BullMQ 4.x supports `jitter` in exponential backoff.)
+### D3 — Retry bounds: `maxAttempts = 5`, exponential backoff 1 s base, all env-config
+BullMQ: `attempts: PAYROLL_MAX_RETRY_ATTEMPTS` (default 5 = 1 initial + 4 retries), `backoff: { type: 'exponential', delay: PAYROLL_RETRY_BASE_DELAY_MS }` — BullMQ computes each delay as `base × 2^(attempt−1)` → 1/2/4/8 s (no jitter: the plain schedule keeps delays deterministic, which the retry-exhaustion e2e relies on).
+Env vars: `PAYROLL_MAX_RETRY_ATTEMPTS` (5), `PAYROLL_RETRY_BASE_DELAY_MS` (1000).
+Permanent errors are thrown **non-retryable**, so the job fails immediately and the DB is the dead-letter (`status='failed'` + `error_type='PERMANENT'` + `failedReason`). `removeOnComplete`/`removeOnFail: true` keep Redis bounded — the audit trail lives in Postgres, not Redis — and freeing a completed job's `jobId` is also what lets the relay re-use the per-employee key (`payroll-event-queue.service.ts`).
 
 ### D4 — Worker liveness: heartbeat table + `/health` deep check (✅ implemented)
 New `worker_heartbeats` table (`worker_id` PK, `hostname`, `started_at`, `last_seen_at`) upserted by `HeartbeatService` (`WORKER_HEARTBEAT_INTERVAL_MS`, default 5000, unref'd timer + immediate touch; `workerId` = `WORKER_ID` env or `${hostname}:${pid}`). `/health` (`HealthResponseDto`) now returns `workers: WorkerLivenessDto[]` (`workerId`/`hostname`/`lastSeenAt`/`stale`) plus `stalled: number` (`queue.getJobCounts()`); any worker `lastSeenAt` older than `HEALTH_WORKER_STALE_MS` (default 15000) or `stalled > 0` ⇒ `degraded`.

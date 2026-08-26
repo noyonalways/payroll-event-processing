@@ -14,12 +14,12 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 | 3 | `bullmq-queue-integration` | BullMQ module setup, per-employee FIFO (`jobId = employeeId` keeps one job in flight; the `completed`-event relay drains the burst in sequence order), enqueue on event creation (2s best-effort — Redis-down never blocks submission), worker entrypoint in `apps/worker` with guarded `queued→processing→success` transitions and concurrent-safe claim | ✅ Done |
 | 4 | `simulated-payroll-processor` | Handler strategy registry (extensible per event type), simulated external call with random transient/permanent failure, success result storage, structured logging (accepted / started / succeeded / failed) | ✅ Done |
 | 5 | `retry-and-failure-strategy` | Separate temporary vs permanent failure; BullMQ retry with exponential backoff for transient errors; `failedReason` + attempt log stored on permanent failure; dead-letter behaviour | ✅ Done |
-| 6 | `idempotency-layer` | **Required** `Idempotency-Key` header (NOT NULL + UNIQUE in DB — nullable defeats the dedup guarantee), short-circuit duplicate requests with cached/stored response, integration tests — **(core shipped in `event-submission-api`: required header, UNIQUE constraint, stored-response short-circuit; remaining: dedicated integration tests)** | ⬜ Pending |
+| 6 | `idempotency-layer` | **Required** `Idempotency-Key` header, shared store-and-replay layer (`idempotency_records` table with `UNIQUE (scope, key)` arbiter, TTL + sweep, `P2002` race handling), `POST /events` refactored onto it, dedicated unit + e2e integration tests (`test/idempotency-records.e2e-spec.ts`) | ✅ Done |
 | 7 | `concurrency-and-crash-recovery` | Transactional row-locked processing (`SELECT … FOR UPDATE` + guarded `queued→processing` claim in ONE interactive tx that commits terminal `success`/`failed` together with the `event_attempts` audit row); transient failures abort the tx (claim rolls back) — crash at any point leaves the row claimable; `event_attempts`/`worker_heartbeats` tables; BullMQ stalled-job recovery settings (`WORKER_OPTIONS`); worker heartbeats + `/health` liveness (`workers[]`/`stalled`, degraded on stale worker or stalled job) | ✅ Done |
-| 8 | `event-status-api` | **GET /events/:id** (detail + attempt/audit history, 404 handling) — ✅ shipped; remaining: GET /events (list with filters), GET /events/:id/history | ⬜ Pending (GET /events/:id ✅) |
-| 9 | `minimal-frontend` | React/Vite (or Next.js) demo UI: submit form, event list with live-polling status badges, event detail drawer/page showing processing result and failure info | ⬜ Pending |
-| 10 | `test-suite` | **Jest** + Supertest + @nestjs/testing — unit (mocks), integration (real DB/Redis in Docker), e2e (full HTTP lifecycle via Supertest). Cover all 9 assignment scenarios incl. a worker-recovery test where practical | ⬜ Pending |
-| 11 | `ci-and-docs` | GitHub Actions workflow (lint → test → build → docker build), final README, architecture diagram — **Swagger/OpenAPI** (UI at /api-docs, JSON at /api-docs-json) was delivered early by change `swagger-openapi` | ⬜ Pending (Swagger portion ✅ shipped by `swagger-openapi`) |
+| 8 | `event-status-api` | **GET /events/:id** — read-only status: committed lifecycle state + event details + terminal attempt trail (ascending by `attemptNumber`), 404 `ErrorResponseDto`, `sequence` BigInt→Number — shipped with Swagger docs and e2e (`test/event-status.e2e-spec.ts`). List endpoints (`GET /events`, `GET /events/:id/history`) deliberately deferred — out of assignment scope | ✅ Done |
+| 9 | `minimal-frontend` | React + Vite demo UI: typed submit form with demo-scenario selector (`EMP-DEMO-*`), tracked-events list with live-polling status badges (3 s), detail panel with processing result + terminal attempt trail; Vitest + Testing Library coverage | ✅ Done |
+| 10 | `test-suite` | 111 backend unit tests + 40 e2e (7 suites: submission, queue, queue-redis-down, processing/retry/exhaustion/recovery, idempotency-records, event-status, api-docs) + 52 frontend Vitest — all gated in CI | ✅ Done |
+| 11 | `ci-and-docs` | GitHub Actions CI (backend lint/unit/build · frontend lint/vitest/build · e2e against real Postgres + Redis service containers — all green on `main`), final README, architecture diagram — **Swagger/OpenAPI** (UI at /api-docs, JSON at /api-docs-json) was delivered early by change `swagger-openapi` | ✅ Done |
 
 ---
 
@@ -42,14 +42,14 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 - After each `/opsx:apply`, mark the row ✅ Done.
 - The roadmap may be adjusted if implementation reveals new dependencies.
 - Primary evaluation focus: reliability concepts (items 5–7) and test quality (item 10).
-- Swagger/OpenAPI (item 11's API-docs portion) was pulled forward and shipped by change `swagger-openapi`; item 11's remaining scope is CI + final README + architecture diagram.
+- Swagger/OpenAPI (item 11's API-docs portion) was pulled forward and shipped by change `swagger-openapi`; item 11's remaining scope (CI + final README + architecture diagram) is shipped with it now — all 11 changes are complete.
 
 ---
 
 ## Reliability Checklist (spans multiple changes)
 
 - [x] Temporary vs permanent failure differentiation
-- [ ] Idempotency (no duplicate business effects)
+- [x] Idempotency (no duplicate business effects)
 - [x] Multiple workers / concurrency safety
 - [x] Worker crash recovery (stalled jobs + tx rollback)
 - [x] Processing consistency (exactly-once transactional write)
