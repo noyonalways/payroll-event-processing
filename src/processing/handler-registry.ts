@@ -3,6 +3,7 @@ import { EventType } from '../events/event-type';
 import { PayrollEventStrategy } from './payroll-event.strategy';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';
+import { DepartmentChangeHandler } from './handlers/department-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
 
 /**
@@ -18,11 +19,13 @@ export class HandlerRegistry {
     bankAccountChange: BankAccountChangeHandler,
     addressChange: AddressChangeHandler,
     salaryChange: SalaryChangeHandler,
+    departmentChange: DepartmentChangeHandler,
   ) {
     this.strategies = {
       [EventType.BANK_ACCOUNT_CHANGE]: bankAccountChange,
       [EventType.ADDRESS_CHANGE]: addressChange,
       [EventType.SALARY_CHANGE]: salaryChange,
+      [EventType.DEPARTMENT_CHANGE]: departmentChange,
     };
   }
 

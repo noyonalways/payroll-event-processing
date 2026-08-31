@@ -3,6 +3,7 @@ import { IsEnum, IsObject } from 'class-validator';
 import { EventType } from '../event-type';
 import { AddressChangePayloadDto } from './payloads/address-change.dto';
 import { BankAccountChangePayloadDto } from './payloads/bank-account-change.dto';
+import { DepartmentChangePayloadDto } from './payloads/department-change.dto';
 import { SalaryChangePayloadDto } from './payloads/salary-change.dto';
 
 /**
@@ -16,6 +17,7 @@ import { SalaryChangePayloadDto } from './payloads/salary-change.dto';
   BankAccountChangePayloadDto,
   AddressChangePayloadDto,
   SalaryChangePayloadDto,
+  DepartmentChangePayloadDto,
 )
 export class CreateEventDto {
   @ApiProperty({
@@ -34,6 +36,7 @@ export class CreateEventDto {
       { $ref: getSchemaPath(BankAccountChangePayloadDto) },
       { $ref: getSchemaPath(AddressChangePayloadDto) },
       { $ref: getSchemaPath(SalaryChangePayloadDto) },
+      { $ref: getSchemaPath(DepartmentChangePayloadDto) },
     ],
   })
   @IsObject({ message: 'payload must be an object' })

@@ -23,7 +23,7 @@
 
 ## 1. Context & goals
 
-The service receives employee payroll events — `BANK_ACCOUNT_CHANGE`, `ADDRESS_CHANGE`, `SALARY_CHANGE` — and processes them **asynchronously** so the HTTP response is fast and never blocked by (slow, occasionally failing) downstream work.
+The service receives employee payroll events — `BANK_ACCOUNT_CHANGE`, `ADDRESS_CHANGE`, `SALARY_CHANGE`, `DEPARTMENT_CHANGE` — and processes them **asynchronously** so the HTTP response is fast and never blocked by (slow, occasionally failing) downstream work.
 
 **Ground rules (from the assignment):**
 
@@ -172,7 +172,7 @@ See the **ERD** in eraser.io. Four tables:
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | |
-| `event_type` | enum/text | `BANK_ACCOUNT_CHANGE` \| `ADDRESS_CHANGE` \| `SALARY_CHANGE` |
+| `event_type` | enum/text | `BANK_ACCOUNT_CHANGE` \| `ADDRESS_CHANGE` \| `SALARY_CHANGE` \| `DEPARTMENT_CHANGE` |
 | `employee_id` | text | group key for ordering |
 | `payload` | JSONB | validated event payload |
 | `sequence` | bigint | per-employee monotonic counter |

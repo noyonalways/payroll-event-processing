@@ -49,4 +49,15 @@ export const EVENT_EXAMPLES: Record<string, EventSubmissionExample> = {
       },
     },
   },
+  'Department Change': {
+    summary: 'Transfer an employee to a new department',
+    value: {
+      eventType: 'DEPARTMENT_CHANGE',
+      payload: {
+        employeeId: 'emp-123',
+        effectiveDate: '2026-09-01',
+        newDepartment: 'Engineering',
+      },
+    },
+  },
 };

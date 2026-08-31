@@ -36,7 +36,7 @@ Built with **NestJS + TypeScript + PostgreSQL + Redis + BullMQ + Docker + GitHub
 ## What it does
 
 The service receives employee payroll-related events (`BANK_ACCOUNT_CHANGE`, `ADDRESS_CHANGE`,
-`SALARY_CHANGE`), persists them, and processes them **asynchronously** in the background so the
+`SALARY_CHANGE`, `DEPARTMENT_CHANGE`), persists them, and processes them **asynchronously** in the background so the
 HTTP request returns within milliseconds — it never blocks on processing work.
 
 Event submission → validate → idempotency check → persist → enqueue → fast `201` response.
@@ -51,6 +51,11 @@ read-only status endpoint (or the demo UI, which polls it).
 | `BANK_ACCOUNT_CHANGE` | `employeeId`, `effectiveDate`, `iban` |
 | `ADDRESS_CHANGE` | `employeeId`, `effectiveDate`, `street`, `city`, `postalCode`, `country` |
 | `SALARY_CHANGE` | `employeeId`, `effectiveDate`, `newSalary`, `currency` |
+| `DEPARTMENT_CHANGE` | `employeeId`, `effectiveDate`, `newDepartment` |
+
+> Adding a new event type is a drop-in: new enum member + payload DTO + handler, each registered in
+> one line (`PayloadDtoRegistry`, `HandlerRegistry`). No schema migration (payload is JSONB), no
+> controller/service/worker changes.
 
 Event lifecycle: `received → queued → processing → success | failed` (with a per-attempt audit trail).
 

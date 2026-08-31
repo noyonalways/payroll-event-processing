@@ -82,12 +82,21 @@ describe('POST /events (e2e)', () => {
       currency: 'EUR',
     },
   });
+  const departmentChange = () => ({
+    eventType: 'DEPARTMENT_CHANGE',
+    payload: {
+      employeeId: employee(),
+      effectiveDate: '2026-09-01',
+      newDepartment: 'Engineering',
+    },
+  });
 
   describe('201 submissions', () => {
     it.each([
       ['BANK_ACCOUNT_CHANGE', bankAccount],
       ['ADDRESS_CHANGE', addressChange],
       ['SALARY_CHANGE', salaryChange],
+      ['DEPARTMENT_CHANGE', departmentChange],
     ])('%s returns 201 { id, status: "received" }', async (_name, body) => {
       const res = await http()
         .post('/events')
@@ -118,6 +127,17 @@ describe('POST /events (e2e)', () => {
     it('rejects a missing required payload field', async () => {
       const body = bankAccount();
       delete (body.payload as Record<string, unknown>).iban;
+
+      await http()
+        .post('/events')
+        .set('Idempotency-Key', key())
+        .send(body)
+        .expect(400);
+    });
+
+    it('rejects a missing DEPARTMENT_CHANGE required field', async () => {
+      const body = departmentChange();
+      delete (body.payload as Record<string, unknown>).newDepartment;
 
       await http()
         .post('/events')

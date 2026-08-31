@@ -29,6 +29,11 @@ describe('PayloadValidator', () => {
       newSalary: 75_000,
       currency: 'EUR',
     },
+    [EventType.DEPARTMENT_CHANGE]: {
+      employeeId: 'emp-4',
+      effectiveDate: '2026-09-01',
+      newDepartment: 'Engineering',
+    },
   };
 
   describe('valid payloads are accepted', () => {
@@ -71,6 +76,23 @@ describe('PayloadValidator', () => {
 
       await expect(
         validator.validate(EventType.BANK_ACCOUNT_CHANGE, payload),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a missing required field (newDepartment)', async () => {
+      const payload = { ...validPayloads[EventType.DEPARTMENT_CHANGE] } as Record<string, unknown>;
+      delete payload.newDepartment;
+
+      await expect(
+        validator.validate(EventType.DEPARTMENT_CHANGE, payload),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects an unknown payload field on DEPARTMENT_CHANGE (transferDate)', async () => {
+      const payload = { ...validPayloads[EventType.DEPARTMENT_CHANGE], transferDate: '2026-09-02' };
+
+      await expect(
+        validator.validate(EventType.DEPARTMENT_CHANGE, payload),
       ).rejects.toThrow(BadRequestException);
     });
 

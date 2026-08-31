@@ -1,5 +1,6 @@
 import { BankAccountChangeHandler } from './bank-account-change.handler';
 import { AddressChangeHandler } from './address-change.handler';
+import { DepartmentChangeHandler } from './department-change.handler';
 import { SalaryChangeHandler } from './salary-change.handler';
 import { FailureConfig, SimulatedPayrollProvider } from '../simulated-payroll-provider';
 import { HandlerInput } from '../processing.types';
@@ -76,5 +77,21 @@ describe('per-type processing handlers', () => {
     );
 
     expect(result.acknowledged).toEqual({ newSalary: 75000, currency: 'EUR' });
+  });
+
+  it('department change acknowledges the new department', async () => {
+    const handler = new DepartmentChangeHandler(provider);
+    const result = await handler.handle(
+      input(EventType.DEPARTMENT_CHANGE, {
+        employeeId: 'emp-4',
+        effectiveDate: '2026-09-01',
+        newDepartment: 'Engineering',
+      }),
+    );
+
+    expect(result.reference).toMatch(/^SIM-/);
+    expect(result.employeeId).toBe('emp-4');
+    expect(result.effectiveDate).toBe('2026-09-01');
+    expect(result.acknowledged).toEqual({ newDepartment: 'Engineering' });
   });
 });
