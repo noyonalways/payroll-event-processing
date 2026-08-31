@@ -101,7 +101,8 @@ model EventAttempt {
 /// (`WORKER_HEARTBEAT_INTERVAL_MS`). Backs the `/health` worker-liveness
 /// check: a worker whose `lastSeenAt` is older than `HEALTH_WORKER_STALE_MS`
 /// is reported stale and degrades the endpoint. worker_id = `WORKER_ID` env
-/// or `${hostname}:${pid}`.
+/// or `${hostname}:${pid}`. Rows not seen within `WORKER_HEARTBEAT_TTL_MS`
+/// are evicted by `/health` so a replaced worker is forgotten, not degraded.
 model WorkerHeartbeat {
   workerId   String   @id @map("worker_id")
   hostname   String

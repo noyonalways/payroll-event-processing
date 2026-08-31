@@ -18,7 +18,7 @@ describe('HealthController', () => {
   let controller: HealthController;
   let prismaService: {
     $queryRaw: jest.Mock;
-    workerHeartbeat: { findMany: jest.Mock };
+    workerHeartbeat: { findMany: jest.Mock; deleteMany: jest.Mock };
   };
   let redisCreateClient: jest.Mock;
   const queue = { getJobCounts: jest.fn() };
@@ -26,7 +26,10 @@ describe('HealthController', () => {
   beforeEach(async () => {
     prismaService = {
       $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
-      workerHeartbeat: { findMany: jest.fn().mockResolvedValue([]) },
+      workerHeartbeat: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
     };
     queue.getJobCounts.mockResolvedValue({ stalled: 0 });
 
@@ -134,6 +137,31 @@ describe('HealthController', () => {
 
       expect(result.workers[0].stale).toBe(true);
       expect(result.status).toBe('degraded');
+    });
+  });
+
+  describe('Scenario: Retired workers are evicted, not degraded (D4 TTL)', () => {
+    it('prunes heartbeats not seen within WORKER_HEARTBEAT_TTL_MS before reading liveness', async () => {
+      // The "Redis unreachable" test swapped the client to a failing one — restore it.
+      redisCreateClient.mockReturnValue({
+        connect: jest.fn().mockResolvedValue(undefined),
+        ping: jest.fn().mockResolvedValue('PONG'),
+        disconnect: jest.fn().mockResolvedValue(undefined),
+      });
+      // 2h-old row (default TTL is 1h): gets deleted, so /health sees no stale worker.
+      prismaService.workerHeartbeat.deleteMany.mockResolvedValue({ count: 1 });
+
+      const result = await controller.check();
+
+      expect(prismaService.workerHeartbeat.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            lastSeenAt: expect.objectContaining({ lt: expect.any(Date) }),
+          }),
+        }),
+      );
+      expect(result.workers).toEqual([]);
+      expect(result.status).toBe('ok');
     });
   });
 

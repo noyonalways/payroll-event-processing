@@ -75,9 +75,30 @@ export class HealthController {
    * HEALTH_WORKER_STALE_MS. A heartbeat failure (DB down) is NOT a hard fail for
    * this helper — the DB check already surfaces that — it just reports no
    * workers so the overall status reflects the dependency error instead.
+   *
+   * Retired workers are forgotten, not degraded: rows not seen within
+   * WORKER_HEARTBEAT_TTL_MS (default 1h) are evicted before the liveness read.
+   * A worker that was replaced/rescaled can never refresh its row, so without
+   * this it would degrade `/health` forever; a recently-crashed worker still
+   * surfaces as stale inside the TTL window.
    */
   private async checkWorkers(staleMs: number): Promise<WorkerLivenessDto[]> {
     try {
+      const ttlMs = this.configService.get<number>(
+        'WORKER_HEARTBEAT_TTL_MS',
+        3_600_000,
+      );
+      const evicted = await this.prisma.workerHeartbeat.deleteMany({
+        where: {
+          lastSeenAt: { lt: new Date(Date.now() - ttlMs) },
+        },
+      });
+      if (evicted.count > 0) {
+        this.logger.log(
+          `Evicted ${evicted.count} retired worker heartbeat(s) not seen within ${ttlMs}ms`,
+        );
+      }
+
       const rows = await this.prisma.workerHeartbeat.findMany({
         orderBy: { lastSeenAt: 'desc' },
         select: { workerId: true, hostname: true, lastSeenAt: true },
