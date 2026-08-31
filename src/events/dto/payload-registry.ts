@@ -1,6 +1,7 @@
 import { EventType } from '../event-type';
 import { AddressChangePayloadDto } from './payloads/address-change.dto';
 import { BankAccountChangePayloadDto } from './payloads/bank-account-change.dto';
+import { DepartmentChangePayloadDto } from './payloads/department-change.dto';
 import { SalaryChangePayloadDto } from './payloads/salary-change.dto';
 
 /**
@@ -13,4 +14,5 @@ export const PayloadDtoRegistry: Record<EventType, new () => object> = {
   [EventType.BANK_ACCOUNT_CHANGE]: BankAccountChangePayloadDto,
   [EventType.ADDRESS_CHANGE]: AddressChangePayloadDto,
   [EventType.SALARY_CHANGE]: SalaryChangePayloadDto,
+  [EventType.DEPARTMENT_CHANGE]: DepartmentChangePayloadDto,
 };

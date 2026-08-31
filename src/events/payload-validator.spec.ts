@@ -29,6 +29,11 @@ describe('PayloadValidator', () => {
       newSalary: 75_000,
       currency: 'EUR',
     },
+    [EventType.DEPARTMENT_CHANGE]: {
+      employeeId: 'emp-4',
+      effectiveDate: '2026-09-01',
+      newDepartment: 'Engineering',
+    },
   };
 
   describe('valid payloads are accepted', () => {

@@ -4,6 +4,7 @@ import { SalaryChangeHandler } from './salary-change.handler';
 import { FailureConfig, SimulatedPayrollProvider } from '../simulated-payroll-provider';
 import { HandlerInput } from '../processing.types';
 import { EventType } from '../../events/event-type';
+import { DepartmentChangeHandler } from './department-change.handler';
 
 /**
  * Per-type handler tests use the real provider with the deterministic
