@@ -12,6 +12,7 @@ export type DemoScenarioId =
   | 'success'
   | 'retry-recover'
   | 'retry-fail'
+  | 'fail-after-retries'
   | 'permanent'
   | 'random';
 
@@ -40,15 +41,22 @@ export const DEMO_SCENARIOS: readonly DemoScenario[] = [
     id: 'retry-recover',
     label: 'Retry, then recover',
     description:
-      'Fails transiently on attempts 1–2 (1s → 2s backoff), succeeds at attempt 3 — watch the retry cycle, then the single SUCCESS row.',
+      'Fails transiently on attempts 1–2 (1s → 2s backoff), succeeds at attempt 3 — watch the FAILED rows at attempts 1–2, then the SUCCESS row at attempt 3.',
     employeeId: 'EMP-DEMO-RECOVER',
   },
   {
     id: 'retry-fail',
     label: 'Retry, then exhausted',
     description:
-      'Every attempt fails transiently — retries with backoff (~20 s total), then a single FAILED / TEMPORARY row at the final attempt.',
+      'Every attempt fails transiently — retries with backoff (~20 s total): a FAILED / TEMPORARY row at every attempt, ending in a failed event.',
     employeeId: 'EMP-DEMO-TRANSIENT',
+  },
+  {
+    id: 'fail-after-retries',
+    label: 'Retry, then fail',
+    description:
+      'Fails transiently on attempts 1–2 (1s → 2s backoff), then a permanent rejection at attempt 3 — FAILED / TEMPORARY rows at 1–2, FAILED / PERMANENT at 3, without exhausting the retry budget.',
+    employeeId: 'EMP-DEMO-FAILAFTER',
   },
   {
     id: 'permanent',

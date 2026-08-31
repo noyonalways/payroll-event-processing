@@ -102,7 +102,7 @@ export async function submitEvent(
 }
 
 /**
- * GET /events/{id} — read-only lifecycle state + terminal attempt trail.
+ * GET /events/{id} — read-only lifecycle state + attempt trail.
  * A 404 (unknown id) is normalized into an `ApiError` like any other error.
  */
 export function fetchEventStatus(id: string): Promise<EventStatusResponse> {

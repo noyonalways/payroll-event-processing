@@ -30,8 +30,9 @@ server-side (see `src/processing/demo-scenarios.ts` — the lever wins over
 | Scenario | Reserved employee id | What a reviewer sees |
 | --- | --- | --- |
 | Success (default) | `EMP-DEMO-SUCCESS` | `received → success`, one `SUCCESS` attempt row at 1 |
-| Retry, then recover | `EMP-DEMO-RECOVER` | two transient attempts with backoff (list stays `queued`), then `SUCCESS` at attempt 3 |
-| Retry, then exhausted | `EMP-DEMO-TRANSIENT` | ~20 s of retries, then `FAILED` / `TEMPORARY` at the final attempt (default: 5) |
+| Retry, then recover | `EMP-DEMO-RECOVER` | two transient attempts with backoff (list stays `queued`) — `FAILED` / `TEMPORARY` rows at attempts 1–2, then `SUCCESS` at attempt 3 |
+| Retry, then exhausted | `EMP-DEMO-TRANSIENT` | ~20 s of retries — a `FAILED` / `TEMPORARY` row per attempt, ending in a `failed` event (default: 5 attempts) |
+| Retry, then fail | `EMP-DEMO-FAILAFTER` | transient at attempts 1–2 (1 s→2 s backoff), then rejected permanently at attempt 3 — `FAILED` / `TEMPORARY` rows at 1–2, `FAILED` / `PERMANENT` at 3 |
 | Permanent failure | `EMP-DEMO-PERMANENT` | `FAILED` / `PERMANENT` at attempt 1, no retry |
 | Random (env mode) | `EMP-001` | normal path — outcome follows `PAYROLL_FAILURE_MODE` and the failure rates |
 

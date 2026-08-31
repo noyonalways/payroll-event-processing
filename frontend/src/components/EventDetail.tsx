@@ -137,7 +137,7 @@ export function EventDetail({ entry }: EventDetailProps) {
       </h3>
       {attempts.length === 0 ? (
         <p className="mt-1 text-sm text-muted-foreground">
-          No terminal attempts recorded yet.
+          No attempts recorded yet.
         </p>
       ) : (
         <ol className="mt-1 space-y-2">

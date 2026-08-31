@@ -37,7 +37,7 @@ describe('PayrollEventProcessor', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
     },
-    eventAttempt: { create: jest.fn() },
+    eventAttempt: { create: jest.fn(), upsert: jest.fn() },
     $transaction: jest.fn(),
   };
   const queueService = { enqueue: jest.fn() };
@@ -90,6 +90,7 @@ describe('PayrollEventProcessor', () => {
       return ops;
     });
     prisma.eventAttempt.create.mockResolvedValue({ id: 'attempt-1' });
+    prisma.eventAttempt.upsert.mockResolvedValue({ id: 'attempt-1' });
   });
 
   describe('claim → dispatch → success lifecycle (delegated)', () => {
@@ -145,13 +146,42 @@ describe('PayrollEventProcessor', () => {
       );
 
       // Only the received → queued ensure ran at the processor layer — no
-      // `processing → queued` reset update.
+      // `processing → queued` reset update. The audit row for the attempt is a
+      // separate eventAttempt write, not a payroll_events write.
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(1);
       const writtenStatuses = (prisma.payrollEvent.updateMany.mock.calls as Array<
         [{ data: { status: EventStatus } }]
       >).map((c) => c[0].data.status);
       expect(writtenStatuses).not.toContain(EventStatus.PROCESSING);
       expect(writtenStatuses).not.toContain(EventStatus.FAILED);
+    });
+
+    it('records the attempt as FAILED(TEMPORARY) at the 1-based attempt number (every-attempt audit)', async () => {
+      await expect(processor.process(job())).rejects.toBeInstanceOf(
+        TransientPayrollFailureError,
+      );
+
+      // Attempt 1 ran and failed transiently → its FAILED(TEMPORARY) row is
+      // appended outside the aborted claim, so the UI shows the retry cycle.
+      expect(prisma.eventAttempt.create).toHaveBeenCalledWith({
+        data: {
+          eventId: 'evt-1',
+          attemptNumber: 1,
+          status: 'FAILED',
+          errorType: 'TEMPORARY',
+          failedReason: 'simulated down',
+        },
+      });
+    });
+
+    it('never masks the transient error when the audit write itself fails', async () => {
+      prisma.eventAttempt.create.mockRejectedValueOnce(
+        new Error('connection reset'),
+      );
+
+      await expect(processor.process(job())).rejects.toBeInstanceOf(
+        TransientPayrollFailureError,
+      );
     });
 
     it('logs a retrying entry at warn level with attempt/max context', async () => {
@@ -230,15 +260,23 @@ describe('PayrollEventProcessor', () => {
         where: { id: 'evt-x', status: EventStatus.QUEUED },
         data: { status: EventStatus.FAILED },
       });
-      // The audit row records the FINAL attempt that consumed the retries.
-      expect(prisma.eventAttempt.create).toHaveBeenCalledWith({
-        data: {
+      // The audit row records the FINAL attempt that consumed the retries. It
+      // is upserted against the (event_id, attempt_number) key — process()
+      // already appended the FAILED(TEMPORARY) row for that attempt outside the
+      // aborted claim, so this is idempotent; the create-path stays as the
+      // backstop for infrastructure-exhausted events that recorded no rows.
+      expect(prisma.eventAttempt.upsert).toHaveBeenCalledWith({
+        where: {
+          eventId_attemptNumber: { eventId: 'evt-x', attemptNumber: 5 },
+        },
+        create: {
           eventId: 'evt-x',
           attemptNumber: 5,
           status: 'FAILED',
           errorType: 'TEMPORARY',
           failedReason: 'down',
         },
+        update: { failedReason: 'down' },
       });
     });
 
@@ -278,6 +316,7 @@ describe('PayrollEventProcessor', () => {
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.eventAttempt.create).not.toHaveBeenCalled();
+      expect(prisma.eventAttempt.upsert).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
     });
 

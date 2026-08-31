@@ -3,7 +3,7 @@ import { EventAttemptDto } from './event-attempt.dto';
 
 /**
  * Response body of GET /events/{id} (event-status-api): the event's current
- * committed lifecycle state, its details, and the terminal attempt history.
+ * committed lifecycle state, its details, and the attempt history.
  *
  * A class (not an interface) is required so Swagger can introspect the schema.
  */
@@ -81,8 +81,8 @@ export class EventStatusResponseDto {
   @ApiProperty({
     type: () => [EventAttemptDto],
     description:
-      'Terminal processing attempts from `event_attempts`, ascending by attemptNumber. ' +
-      'Empty for events that have not committed a terminal attempt yet.',
+      'Processing attempts from `event_attempts`, ascending by attemptNumber. ' +
+      'Empty for events that no attempt has run for yet.',
   })
   attempts!: EventAttemptDto[];
 }

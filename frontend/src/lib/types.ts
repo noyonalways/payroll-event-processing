@@ -66,7 +66,7 @@ export interface EventSubmissionResponse {
   status: 'received';
 }
 
-/** One terminal attempt from the append-only `event_attempts` trail. */
+/** One processing attempt from the append-only `event_attempts` trail. */
 export interface EventAttempt {
   attemptNumber: number;
   status: AttemptStatus;

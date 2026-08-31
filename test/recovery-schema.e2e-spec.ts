@@ -38,7 +38,7 @@ describe('recovery schema (event_attempts / worker_heartbeats) (e2e)', () => {
     prisma.$queryRaw<Array<{ indexdef: string }>>`
       SELECT indexdef FROM pg_indexes WHERE tablename = ${table}`;
 
-  describe('event_attempts (append-only terminal-outcome audit trail)', () => {
+  describe('event_attempts (append-only per-attempt audit trail)', () => {
     it('has the expected columns', async () => {
       const cols = await columns('event_attempts');
       const byName = Object.fromEntries(cols.map((c) => [c.column_name, c.data_type]));
@@ -63,6 +63,15 @@ describe('recovery schema (event_attempts / worker_heartbeats) (e2e)', () => {
       expect(idx.some((i) => i.indexdef.includes('event_attempts_event_id_idx'))).toBe(
         true,
       );
+    });
+
+    it('enforces one row per attempt number per event (UNIQUE event_id + attempt_number)', async () => {
+      const idx = await indexes('event_attempts');
+      expect(
+        idx.some((i) =>
+          i.indexdef.includes('event_attempts_event_id_attempt_number_key'),
+        ),
+      ).toBe(true);
     });
   });
 

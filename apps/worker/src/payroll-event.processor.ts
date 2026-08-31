@@ -115,27 +115,37 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     const maxAttempts = job.opts?.attempts ?? this.maxRetryAttempts;
     if (job.attemptsMade < maxAttempts) {
       // Mid-retry: the aborted claim transaction already left the row in
-      // `queued` — nothing to write. No-op.
+      // `queued`, and process() already appended the FAILED(TEMPORARY) audit
+      // row for this attempt — nothing to write here. No-op.
       return;
     }
 
-    // All attempts exhausted — terminal `failed` + the audit row in one
-    // transaction (R5): the attempt number recorded is the FINAL one (BullMQ's
+    // All attempts exhausted — terminal `failed` + the FINAL attempt's audit
+    // row in one transaction (R5). The final FAILED(TEMPORARY) row usually
+    // already exists (the last attempt's transient catch appended it outside
+    // the aborted claim), so the upsert is idempotent there; the create-path
+    // remains the backstop for infrastructure-exhausted events that recorded no
+    // transient rows. The attempt number is the FINAL one (BullMQ's
     // `attemptsMade` is the 0-based count of attempts that ran = last attempt).
     const { eventId, employeeId, eventType, sequence } = job.data;
+    const finalAttempt = job.attemptsMade;
     await this.prisma.$transaction([
       this.prisma.payrollEvent.updateMany({
         where: { id: eventId, status: EventStatus.QUEUED },
         data: { status: EventStatus.FAILED },
       }),
-      this.prisma.eventAttempt.create({
-        data: {
+      this.prisma.eventAttempt.upsert({
+        where: {
+          eventId_attemptNumber: { eventId, attemptNumber: finalAttempt },
+        },
+        create: {
           eventId,
-          attemptNumber: job.attemptsMade,
+          attemptNumber: finalAttempt,
           status: AttemptStatus.FAILED,
           errorType: AttemptErrorType.TEMPORARY,
           failedReason: error.message,
         },
+        update: { failedReason: error.message },
       }),
     ]);
     this.logger.error(
@@ -202,11 +212,15 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       if (error instanceof TransientPayrollFailureError) {
         // Transient failure (R1): claimAndProcess re-threw, so the transaction
         // ABORTED and the claim rolled back to `queued` — there is no explicit
-        // reset write. Re-throw so BullMQ schedules the retry (D3).
+        // reset write. The attempt DID run, so its FAILED(TEMPORARY) audit row
+        // is appended here, outside the aborted transaction (a row written
+        // inside it would roll back with the claim). Then re-throw so BullMQ
+        // schedules the retry (D3).
         this.logger.warn(
           `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
             `(seq ${sequence}, attempt ${attempt}/${this.maxRetryAttempts}, worker ${this.workerPid}) — retrying: ${this.errorMessage(error)}`,
         );
+        await this.recordTransientAttempt(eventId, attempt, error);
         throw error;
       }
 
@@ -218,6 +232,43 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
           `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — retrying (infrastructure): ${this.errorMessage(error)}`,
       );
       throw error;
+    }
+  }
+
+  /**
+   * Appends the FAILED(TEMPORARY) audit row for an attempt that ran and failed
+   * transiently. Written OUTSIDE the aborted claim transaction — a row created
+   * inside it would roll back alongside the claim (the abort already reverted
+   * `processing → queued`). On retry exhaustion, `onFailed` upserts the final
+   * attempt's row against the SAME `(event_id, attempt_number)` key, so this
+   * row is also the anchor for the terminal `failed` write when the last
+   * attempt is transient.
+   *
+   * Best-effort by design: recording must never mask the original transient
+   * error that drives the BullMQ retry, so a recording failure (e.g. a unique
+   * violation from a stray duplicate attempt, or a DB hiccup) is logged and
+   * swallowed rather than re-thrown.
+   */
+  private async recordTransientAttempt(
+    eventId: string,
+    attemptNumber: number,
+    error: unknown,
+  ): Promise<void> {
+    try {
+      await this.prisma.eventAttempt.create({
+        data: {
+          eventId,
+          attemptNumber,
+          status: AttemptStatus.FAILED,
+          errorType: AttemptErrorType.TEMPORARY,
+          failedReason: this.errorMessage(error),
+        },
+      });
+    } catch (recordError) {
+      this.logger.error(
+        `Failed to record transient attempt ${attemptNumber} for event ${eventId}: ` +
+          this.errorMessage(recordError),
+      );
     }
   }
 

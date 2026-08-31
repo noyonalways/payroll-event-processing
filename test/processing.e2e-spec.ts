@@ -113,20 +113,22 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     expect(row.result).toBeNull();
     expect(row.processedAt).toBeNull();
 
-    // R5 audit trail: the exhaustion path commits `queued → failed` and the
-    // FAILED(TEMPORARY) attempt row in ONE $transaction — exactly one row, with
-    // the FINAL attempt number (BullMQ's attemptsMade after 5 attempts). The
-    // row write and the audit insert became visible in the same commit, so by
-    // the time the event row reads FAILED the attempt row must already exist.
+    // R5 audit trail: every attempt is recorded — one FAILED(TEMPORARY) row per
+    // attempt (1..5), and the exhaustion path upserts the FINAL attempt's row
+    // atomically with `queued → failed`, so by the time the event row reads
+    // FAILED the complete per-attempt trail must already exist.
     const attempts = await prisma.eventAttempt.findMany({
       where: { eventId: id },
+      orderBy: { attemptNumber: 'asc' },
     });
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({
-      eventId: id,
-      attemptNumber: 5,
-      status: 'FAILED',
-      errorType: 'TEMPORARY',
+    expect(attempts).toHaveLength(5);
+    attempts.forEach((attempt, index) => {
+      expect(attempt).toMatchObject({
+        eventId: id,
+        attemptNumber: index + 1,
+        status: 'FAILED',
+        errorType: 'TEMPORARY',
+      });
     });
 
     // No re-enqueue loop: once FAILED the row is terminal — it must not flip
@@ -135,6 +137,6 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     const after = await prisma.payrollEvent.findUnique({ where: { id } });
     expect(after?.status).toBe('FAILED');
     expect(after?.result).toBeNull();
-    expect(await prisma.eventAttempt.count({ where: { eventId: id } })).toBe(1);
+    expect(await prisma.eventAttempt.count({ where: { eventId: id } })).toBe(5);
   });
 });

@@ -121,6 +121,7 @@ describe('SimulatedPayrollProvider', () => {
         expect(demoScenarioFor('EMP-DEMO-SUCCESS')).toBe('SUCCESS');
         expect(demoScenarioFor('EMP-DEMO-RECOVER')).toBe('RECOVER');
         expect(demoScenarioFor('EMP-DEMO-TRANSIENT')).toBe('TRANSIENT');
+        expect(demoScenarioFor('EMP-DEMO-FAILAFTER')).toBe('FAILAFTER');
         expect(demoScenarioFor('EMP-DEMO-PERMANENT')).toBe('PERMANENT');
       });
 
@@ -157,6 +158,16 @@ describe('SimulatedPayrollProvider', () => {
       await expect(
         p.simulate({ employeeId: 'EMP-DEMO-TRANSIENT', attempt: 1 }),
       ).rejects.toMatchObject({ isTransient: true });
+    });
+
+    it('EMP-DEMO-FAILAFTER fails transiently before the threshold and permanently from it', async () => {
+      const p = provider('always-success'); // env mode cannot win over the demo id
+      await expect(
+        p.simulate({ employeeId: 'EMP-DEMO-FAILAFTER', attempt: 1 }),
+      ).rejects.toMatchObject({ isTransient: true });
+      await expect(
+        p.simulate({ employeeId: 'EMP-DEMO-FAILAFTER', attempt: 3 }),
+      ).rejects.toMatchObject({ isTransient: false });
     });
 
     it('EMP-DEMO-RECOVER fails before the attempt threshold and succeeds from it', async () => {

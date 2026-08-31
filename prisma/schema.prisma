@@ -68,21 +68,24 @@ enum AttemptStatus {
   FAILED
 }
 
-/// Why a failed attempt failed. TEMPORARY = retries exhausted after transient
-/// failures; PERMANENT = business rejection that retrying would not fix.
+/// Why a failed attempt failed. TEMPORARY = a transient failure: the attempt is
+/// retried, and the row may be the mid-retry record or the exhausted final
+/// attempt. PERMANENT = business rejection that retrying would not fix.
 enum AttemptErrorType {
   TEMPORARY
   PERMANENT
 }
 
-/// Append-only audit trail of processing attempts that committed a terminal
-/// outcome (success | failed). Each row is inserted in the SAME database
-/// transaction as the `payroll_events` terminal transition (design D2): a
-/// SUCCESS row alongside `processing → success`, a FAILED(PERMANENT) row
-/// alongside `processing → failed`, and a FAILED(TEMPORARY) row on retry
-/// exhaustion. Transient attempts that are retried are NOT recorded here —
-/// they roll back with the aborted transaction and remain observable through
-/// the structured `retrying` log lines. Rows are never updated or deleted.
+/// Append-only audit trail of every processing attempt, at most one row per
+/// attempt number per event (UNIQUE (event_id, attempt_number)). A terminal
+/// attempt's row is inserted in the SAME database transaction as the
+/// `payroll_events` terminal transition (design D1): a SUCCESS row alongside
+/// `processing → success`, a FAILED(PERMANENT) row alongside
+/// `processing → failed`. A transient attempt's FAILED(TEMPORARY) row is
+/// appended right after the aborted claim transaction rolls back (recording
+/// that the attempt actually ran and was retried); on retry exhaustion the
+/// final attempt's row is upserted atomically with `queued → failed`. Rows are
+/// never deleted.
 model EventAttempt {
   id            String             @id @default(uuid())
   eventId       String             @map("event_id")
@@ -93,6 +96,7 @@ model EventAttempt {
   result        Json?
   createdAt     DateTime           @default(now()) @map("created_at")
 
+  @@unique([eventId, attemptNumber])
   @@index([eventId])
   @@map("event_attempts")
 }

@@ -1,10 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 /**
- * One terminal processing attempt from the append-only `event_attempts` audit
- * trail, as returned by GET /events/{id} (event-status-api). A SUCCESS attempt
- * carries `result`; a FAILED attempt carries `errorType` + `failedReason`;
- * the other fields are null.
+ * One processing attempt from the append-only `event_attempts` audit trail,
+ * as returned by GET /events/{id} (event-status-api). Every attempt that ran
+ * is recorded (one row per attempt number per event): a SUCCESS attempt
+ * carries `result`; a FAILED attempt — terminal or mid-retry — carries
+ * `errorType` + `failedReason`; the other fields are null.
  */
 export class EventAttemptDto {
   @ApiProperty({
@@ -25,8 +26,9 @@ export class EventAttemptDto {
     example: 'TEMPORARY',
     nullable: true,
     description:
-      'Failure category — TEMPORARY = retries exhausted after transient failures, ' +
-      'PERMANENT = business rejection. null for successful attempts.',
+      'Failure category — TEMPORARY = transient failure (the attempt was or will ' +
+      'be retried; on exhaustion it is the final failed attempt), PERMANENT = ' +
+      'business rejection that retrying would not fix. null for successful attempts.',
   })
   errorType!: 'TEMPORARY' | 'PERMANENT' | null;
 

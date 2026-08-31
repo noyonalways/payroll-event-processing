@@ -19,11 +19,12 @@ describe('demo scenarios', () => {
     expect(DEFAULT_SCENARIO_ID).toBe('success');
   });
 
-  it('exposes exactly the five reviewer scenarios with stable ids', () => {
+  it('exposes exactly the six reviewer scenarios with stable ids', () => {
     expect(DEMO_SCENARIOS.map((s) => s.id)).toEqual([
       'success',
       'retry-recover',
       'retry-fail',
+      'fail-after-retries',
       'permanent',
       'random',
     ]);
@@ -33,6 +34,7 @@ describe('demo scenarios', () => {
     expect(scenarioById('success').employeeId).toBe('EMP-DEMO-SUCCESS');
     expect(scenarioById('retry-recover').employeeId).toBe('EMP-DEMO-RECOVER');
     expect(scenarioById('retry-fail').employeeId).toBe('EMP-DEMO-TRANSIENT');
+    expect(scenarioById('fail-after-retries').employeeId).toBe('EMP-DEMO-FAILAFTER');
     expect(scenarioById('permanent').employeeId).toBe('EMP-DEMO-PERMANENT');
     expect(scenarioById('random').employeeId).toBe('EMP-001');
   });

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import {
+  DEMO_FAIL_THRESHOLD_ATTEMPT,
   DEMO_PACING_MAX_MS,
   DEMO_PACING_MIN_MS,
   DEMO_RECOVER_THRESHOLD_ATTEMPT,
@@ -142,6 +143,15 @@ export class SimulatedPayrollProvider {
             );
           }
           break;
+        case 'FAILAFTER':
+          if ((context.attempt ?? 1) < DEMO_FAIL_THRESHOLD_ATTEMPT) {
+            throw new TransientPayrollFailureError(
+              'Simulated payroll service unavailable (demo scenario: failing, retrying attempt)',
+            );
+          }
+          throw new PermanentPayrollFailureError(
+            'Simulated payroll service rejected the change (demo scenario: permanent failure after retries)',
+          );
         case 'SUCCESS':
           break;
       }

@@ -115,7 +115,7 @@ POST /events ─────►  received  ───────────► 
 | `processing` → `success` | provider call succeeded | transaction commits `processing→success` + result/processed_at + SUCCESS attempt row together |
 | `processing` → `queued` | transient failure (retry) | **tx ABORT — no explicit reset write**: the re-throw rolls the claim back |
 | `processing` → `failed` | permanent failure | transaction commits `processing→failed` + FAILED(PERMANENT) attempt row together |
-| `queued` → `failed` | retries exhausted (transient) | `onFailed` array transaction commits `queued→failed` + FAILED(TEMPORARY) attempt row |
+| `queued` → `failed` | retries exhausted (transient) | `onFailed` array transaction commits `queued→failed` + upserts the final attempt's FAILED(TEMPORARY) row (already appended by the last transient failure) |
 | `failed` → (dead) | dead-letter | terminal, never reprocessed |
 
 ## 5. Reliability design (the core of the assignment)
@@ -150,7 +150,7 @@ Each requirement mapped to its enforcement point.
 ### R5 — Exactly-once / processing consistency
 - The terminal write is **transactional**: `event → success/failed` + the `event_attempts` row commit in the SAME transaction as the guarded claim — the row lock means exactly one worker holds the claim, so the handler result applied exactly once.
 - The update is guarded: `UPDATE payroll_events SET status='success' WHERE id=? AND status='processing'` — a crash-then-reprocess can only succeed once; the second attempt matches 0 rows and is skipped.
-- Retry exhaustion writes `queued → failed` + FAILED(TEMPORARY) attempt row in one array `$transaction`.
+- Retry exhaustion writes `queued → failed` + the final FAILED(TEMPORARY) attempt row (upserted — the last transient failure already appended it) in one array `$transaction`.
 - **Enforced in:** transactional `event-claim.ts` + status guard + `onFailed` exhaustion transaction.
 
 ### R6 — Event ordering per employee
@@ -197,18 +197,18 @@ See the **ERD** in eraser.io. Four tables:
 
 **Constraints/indexes:** `UNIQUE (scope, key)` — the dedup arbiter; index on `expires_at` for the sweep (`deleteMany(expires_at < now)`).
 
-**`event_attempts`** — append-only audit trail; one row is written AT the terminal point (never per attempt start), committed in the same transaction as the terminal `payroll_events` write (`AttemptStatus`/`AttemptErrorType` enums).
+**`event_attempts`** — append-only audit trail of every attempt that ran, at most one row per `(event_id, attempt_number)` (`UNIQUE`). A transient failure appends its `FAILED(TEMPORARY)` row right after the claim transaction aborts; the terminal `SUCCESS` / `FAILED(PERMANENT)` row commits in the same transaction as the terminal `payroll_events` write (`AttemptStatus`/`AttemptErrorType` enums).
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | |
 | `event_id` | UUID FK → `payroll_events` | indexed (`@@index([eventId])`) |
-| `attempt_number` | int | 1-based; the attempt that reached the terminal outcome |
+| `attempt_number` | int | 1-based; which attempt this row records · `UNIQUE (event_id, attempt_number)` — one row per attempt |
 | `status` | enum | `SUCCESS` \| `FAILED` |
 | `error_type` | enum nullable | `TEMPORARY` \| `PERMANENT` |
 | `failed_reason` | text nullable | why it failed |
 | `result` | JSONB nullable | provider result on success (== the event row's `result`) |
-| `created_at` | timestamptz | commit time of the terminal transition |
+| `created_at` | timestamptz | when the attempt row was appended (a transient row right after the claim aborted; the terminal row at the terminal commit) |
 
 **`worker_heartbeats`** — worker liveness for `/health` (D4).
 
@@ -242,9 +242,9 @@ Both flows are visualized in a single end-to-end sequence diagram in eraser.io.
    b. **Guarded claim:** `UPDATE payroll_events SET status='processing' WHERE id=? AND status='queued'` — 0 rows → stale/duplicate, skip with no side effects.
    c. **Payload read** inside the tx (the DB row stays the source of truth), then dispatch through the handler registry.
 3. **Success** → commit `[event → success + result/processed_at + attempt → SUCCESS w/ result]` → ack job.
-4. **Transient failure** → re-throw inside the tx → **ABORT** → the claim rolls back to `queued` (no explicit reset) → BullMQ schedules the retry with exponential backoff.
+4. **Transient failure** → re-throw inside the tx → **ABORT** → the claim rolls back to `queued` (no explicit reset) and the attempt's `FAILED(TEMPORARY)` audit row is appended outside the aborted transaction → BullMQ schedules the retry with exponential backoff.
 5. **Permanent failure** → commit `[event → failed + attempt → FAILED(PERMANENT, reason)]`, no retry (dead-letter).
-6. **Retries exhausted** (transient) → `onFailed` array `$transaction` commits `[queued → failed + attempt → FAILED(TEMPORARY, reason)]`, audit row recording the final attempt number.
+6. **Retries exhausted** (transient) → `onFailed` array `$transaction` commits `[queued → failed]` + upserts the final attempt's `FAILED(TEMPORARY)`, reason row — idempotent with the row the last transient failure already appended.
 7. **Crash anywhere** between lock and commit → the transaction aborts → the row is back in `queued` (never stuck in `processing`); BullMQ stalled-job detection additionally re-queues a job whose worker died mid-work, and a fresh worker reprocesses safely thanks to the guarded claim + terminal status guard.
 
 ### 7.3 Read-only status (`GET /events/:id`, event-status-api)
@@ -260,12 +260,13 @@ no mutation.
 3. Response `200 EventStatusResponseDto`: committed `status` (lowercase wire format:
    `received`|`queued`|`processing`|`success`|`failed`), event details, `sequence`
    coerced `BigInt → Number` (never a raw BigInt on the wire), `processedAt`/`result`
-   on `success`, null otherwise, and one `EventAttemptDto` per terminal attempt with
+   on `success`, null otherwise, and one `EventAttemptDto` per attempt with
    `attemptNumber`/`status`/`errorType`/`failedReason`/`result`/`createdAt`.
 
 The reported `status` always mirrors the committed `payroll_events` row: because the
 claim is rolled back on any abort, polling between BullMQ retry attempts observes
-`queued` with an empty attempt trail — never a stuck `processing`.
+`queued` with the attempts that have already run on the trail — never a stuck
+`processing`.
 
 ## 8. Failure modes & recovery
 
@@ -278,7 +279,7 @@ claim is rolled back on any abort, polling between BullMQ retry attempts observe
 | Duplicate submit race (concurrent) | unique constraint violation | caught → treated as duplicate |
 | Two workers same event | both claim same job row | `FOR UPDATE` row lock + guarded claim → only one proceeds |
 | Invalid payload | — | `400` at submission, nothing persisted |
-| Demo scenario id (`EMP-DEMO-*`, see `src/processing/demo-scenarios.ts`) | forced outcome per submission: success, `failed`/`PERMANENT` (attempt 1), transient retries → `failed`/`TEMPORARY` (final attempt), or transient-then-success (attempt 3) | deterministic override, wins over `PAYROLL_FAILURE_MODE`; reviewer lever for the demo UI — no persistence change (terminal-only attempt rows unchanged) |
+| Demo scenario id (`EMP-DEMO-*`, see `src/processing/demo-scenarios.ts`) | forced outcome per submission: success, `failed`/`PERMANENT` (attempt 1), transient retries → `failed`/`TEMPORARY` (every attempt), transient-then-success (attempt 3), or transient-then-permanent (attempt 3, `FAILAFTER`) | deterministic override, wins over `PAYROLL_FAILURE_MODE`; reviewer lever for the demo UI — each attempt is recorded on the audit trail |
 
 ## 9. Mapping to the roadmap
 
@@ -291,7 +292,7 @@ claim is rolled back on any abort, polling between BullMQ retry attempts observe
 | 5 `retry-and-failure-strategy` ✅ | temp vs perm, backoff, dead-letter |
 | 6 `idempotency-layer` ✅ | required Idempotency-Key, dedupe |
 | 7 `concurrency-and-crash-recovery` ✅ | row lock + transactional claim/terminal commit, event_attempts audit, stalled-job recovery config, worker heartbeats + /health liveness |
-| 8 `event-status-api` ✅ | GET /events/:id — read-only status + terminal attempt trail (remaining roadmap: GET /events list, GET /events/:id/history) |
+| 8 `event-status-api` ✅ | GET /events/:id — read-only status + attempt trail (remaining roadmap: GET /events list, GET /events/:id/history) |
 | 9 `minimal-frontend` ✅ | demo UI (submit / live status / detail) with scenario selector |
 | 10 `test-suite` ✅ | unit + e2e incl. recovery + frontend Vitest (111 / 40 / 52 tests) |
 | 11 `ci-and-docs` ✅ | `.github/workflows/ci.yml` (backend + frontend + e2e jobs), README + this doc — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |

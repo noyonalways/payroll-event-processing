@@ -52,14 +52,14 @@ read-only status endpoint (or the demo UI, which polls it).
 | `ADDRESS_CHANGE` | `employeeId`, `effectiveDate`, `street`, `city`, `postalCode`, `country` |
 | `SALARY_CHANGE` | `employeeId`, `effectiveDate`, `newSalary`, `currency` |
 
-Event lifecycle: `received → queued → processing → success | failed` (with a terminal attempt/audit trail).
+Event lifecycle: `received → queued → processing → success | failed` (with a per-attempt audit trail).
 
 ### API surface
 
 | Endpoint | Description |
 |---|---|
 | `POST /events` | Submit an event. Requires the `Idempotency-Key` header. Returns `201` with the stored response (duplicates replay it). |
-| `GET /events/:id` | Read-only event status: committed lifecycle state, details, and the terminal attempt history. `404` for unknown ids. |
+| `GET /events/:id` | Read-only event status: committed lifecycle state, details, and the attempt history (one row per attempt). `404` for unknown ids. |
 | `GET /health` | Service health: DB + Redis reachability, worker liveness heartbeats, BullMQ stalled-job count. Always `200`; the body carries `status: ok \| degraded`. |
 | `GET /api-docs` | Swagger UI (interactive). Raw spec at `/api-docs-json`. |
 
@@ -324,8 +324,9 @@ deterministically force each lifecycle outcome server-side — great for a revie
 | Scenario | Employee id | What you'll see |
 |---|---|---|
 | Success (default) | `EMP-DEMO-SUCCESS` | `received → success`, one `SUCCESS` attempt at 1 |
-| Retry, then recover | `EMP-DEMO-RECOVER` | transient at 1–2 (list stays `queued`), `SUCCESS` at attempt 3 |
-| Retry, then exhausted | `EMP-DEMO-TRANSIENT` | ~20 s of retries (backoff 1 s→2 s→4 s→8 s), then `FAILED` / `TEMPORARY` at the final attempt |
+| Retry, then recover | `EMP-DEMO-RECOVER` | transient at 1–2 (list stays `queued`), `FAILED`/`TEMPORARY` rows at 1–2, `SUCCESS` at attempt 3 |
+| Retry, then exhausted | `EMP-DEMO-TRANSIENT` | ~20 s of retries (backoff 1 s→2 s→4 s→8 s), one `FAILED` / `TEMPORARY` row per attempt, then the event ends `failed` |
+| Retry, then fail | `EMP-DEMO-FAILAFTER` | transient at 1–2 (backoff 1 s→2 s), then a permanent rejection at attempt 3 — `FAILED` / `TEMPORARY` rows at 1–2, `FAILED` / `PERMANENT` at 3 |
 | Permanent failure | `EMP-DEMO-PERMANENT` | `FAILED` / `PERMANENT` at attempt 1, no retry |
 
 Scenarios work from *any* submitter (UI, Swagger, curl) and win over `PAYROLL_FAILURE_MODE`.
@@ -371,11 +372,12 @@ key)` carrying the stored HTTP `response_status` + `response_body` and an `expir
 `UNIQUE (scope, key)` is the dedup arbiter; an expiry sweep (`deleteMany(expires_at < now)`)
 releases keys for reuse.
 
-**`event_attempts`** — append-only audit trail. One row is written *at the terminal point* —
-`SUCCESS` alongside `processing → success`, `FAILED(PERMANENT)` alongside
-`processing → failed`, `FAILED(TEMPORARY)` on retry exhaustion — committed in the **same
-transaction** as the `payroll_events` status change. Transient attempts that get retried roll
-back with the aborted claim transaction and write nothing.
+**`event_attempts`** — append-only audit trail of **every** attempt that ran, at most one row
+per attempt number per event (`UNIQUE (event_id, attempt_number)`). A transient failure
+appends a `FAILED(TEMPORARY)` row right after the claim transaction aborts (a row inside it
+would roll back with the claim); the terminal `SUCCESS` / `FAILED(PERMANENT)` row commits in
+the **same transaction** as the `payroll_events` status change; on retry exhaustion the final
+attempt's row is upserted atomically with `queued → failed`.
 
 **`worker_heartbeats`** — worker liveness for `/health`: `worker_id` (PK), `hostname`,
 `started_at`, `last_seen_at`, upserted every `WORKER_HEARTBEAT_INTERVAL_MS`.
@@ -430,10 +432,11 @@ Highlights; the full decision log (⚠️ forward references resolved) is in
 4. **No explicit `processing → queued` reset.** The abort-on-transient-failure rollback is
    the reset, which also covers crashes — the event can never be stuck in `processing`. The
    status endpoint consequently never serves a `processing` row that went away.
-5. **Terminal-only attempt rows.** `event_attempts` records only committed outcomes, so the
-   audit trail stays spec-clean; failed-and-retried attempts are visible in verbose logs
-   instead. Trade-off: finer-grained attempt logging would be noisier and inconsistent with
-   the commit model.
+5. **One audit row per attempt.** `event_attempts` records every attempt that ran — the
+   transient retries get a `FAILED(TEMPORARY)` row outside the aborted claim, and the
+   terminal `SUCCESS` / `FAILED(PERMANENT)` row commits atomically with the terminal
+   transition — so the UI shows the full retry cycle before the terminal outcome. The
+   `UNIQUE (event_id, attempt_number)` constraint keeps the trail one row per attempt.
 6. **Postgres-driven relay.** Enqueue-from-DB on the `completed` event (not at the end of
    `process()`) closes the gap where a producer `add` is suppressed by the in-flight job —
    ordering is guaranteed by the `sequence` column, not by queue metadata alone.

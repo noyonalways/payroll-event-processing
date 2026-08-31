@@ -17,10 +17,11 @@ import { PrismaService } from '../src/prisma/prisma.service';
  * `test/jest-e2e.json` pins `maxWorkers: 1` so the shared Postgres is never
  * touched concurrently):
  *   1. always-transient worker — the retry cadence's backoff windows make the
- *      `queued` + `attempts: []` snapshot deterministic (the spec's own
- *      "Polling a transiently failing event returns queued between attempts"),
- *      exhaustion yields the `failed` terminal + FAILED attempt, and a seeded
- *      multi-attempt trail exercises the ascending-order contract.
+ *      `queued` + non-empty FAILED(TEMPORARY) trail snapshot deterministic
+ *      (the spec's own "Polling a transiently failing event returns queued
+ *      between attempts"), exhaustion yields the `failed` terminal + one
+ *      FAILED row per attempt, and a seeded multi-attempt trail exercises the
+ *      ascending-order contract.
  *   2. always-success worker — the `success` response with processedAt/result
  *      and the SUCCESS attempt matching the committed row.
  *   3. API-only app + setupSwagger — the api-documentation delta for
@@ -136,18 +137,18 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     throw new Error('Timed out polling GET /events/:id');
   };
 
-  it('returns the pending lifecycle state with an empty attempt trail (queued scenario)', async () => {
+  it('returns the retried lifecycle state with a non-empty FAILED trail (queued scenario)', async () => {
     const employeeId = `queued-${randomUUID()}`;
     const id = (await submitSalary(employeeId)).body.id as string;
     const payload = SALARY_PAYLOAD(employeeId);
 
     // Deterministic: between BullMQ retry attempts the claim is rolled back to
-    // `queued` and NO attempt row is written yet — the spec's own "returns
-    // queued between attempts" scenario. Polling until that snapshot is reached
-    // is exact, not a timing race.
+    // `queued` and the attempts that HAVE run are already on the audit trail —
+    // the spec's own "returns queued between attempts" scenario. Polling until
+    // that snapshot is reached is exact, not a timing race.
     const body = await waitForStatus(
       id,
-      (b) => (b.status === 'queued' && b.attempts.length === 0 ? b : null),
+      (b) => (b.status === 'queued' && b.attempts.length >= 1 ? b : null),
     );
 
     expect(body.id).toBe(id);
@@ -158,10 +159,21 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     expect(body.payload).toEqual(payload);
     expect(body.processedAt).toBeNull();
     expect(body.result).toBeNull();
-    expect(body.attempts).toEqual([]);
+
+    // The first attempt already ran and failed transiently; the event is back
+    // in `queued` waiting for the next retry.
+    expect(body.attempts[0]).toMatchObject({
+      attemptNumber: 1,
+      status: 'FAILED',
+      errorType: 'TEMPORARY',
+      result: null,
+    });
+    expect(body.attempts[0].failedReason).toContain(
+      'Simulated payroll service unavailable',
+    );
   });
 
-  it('returns the failed terminal state with the exhausting FAILED attempt (failed scenario)', async () => {
+  it('returns the failed terminal state with one FAILED row per attempt (failed scenario)', async () => {
     const employeeId = `failed-${randomUUID()}`;
     const id = (await submitSalary(employeeId)).body.id as string;
 
@@ -173,16 +185,19 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     expect(body.processedAt).toBeNull();
     expect(body.result).toBeNull();
 
-    // Terminal status matches the attempt trail: one FAILED(TEMPORARY) row for
-    // the FINAL attempt, with the provider's failure message as failedReason.
-    expect(body.attempts).toHaveLength(1);
-    expect(body.attempts[0]).toMatchObject({
-      attemptNumber: 5,
-      status: 'FAILED',
-      errorType: 'TEMPORARY',
-      result: null,
+    // Terminal status matches the attempt trail: every transient attempt is
+    // recorded, so the exhausted event shows FAILED(TEMPORARY) at attempts 1–5,
+    // with the provider's failure message on the final attempt.
+    expect(body.attempts).toHaveLength(5);
+    body.attempts.forEach((attempt, index) => {
+      expect(attempt).toMatchObject({
+        attemptNumber: index + 1,
+        status: 'FAILED',
+        errorType: 'TEMPORARY',
+        result: null,
+      });
     });
-    expect(body.attempts[0].failedReason).toContain(
+    expect(body.attempts[4].failedReason).toContain(
       'Simulated payroll service unavailable',
     );
   });
@@ -191,9 +206,13 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     const employeeId = `ordered-${randomUUID()}`;
     const id = (await submitSalary(employeeId)).body.id as string;
 
-    // Seed a multi-attempt trail directly (append-only audit log; the worker
-    // writes no attempt rows mid-retry, so the seeded rows are stable until
-    // exhaustion). Insert OUT of numeric order — the boundary must re-sort.
+    // Let the event exhaust first: the worker appends FAILED(TEMPORARY) rows
+    // for attempts 1..5, and once `failed` no further rows can be written.
+    await waitForStatus(id, (b) => (b.status === 'failed' ? b : null));
+
+    // Then seed rows the worker will never touch (attempt numbers past the 5
+    // configured attempts), inserted OUT of numeric order — the boundary must
+    // re-sort them alongside the worker's own trail.
     await prisma.eventAttempt.create({
       data: {
         eventId: id,
@@ -206,10 +225,10 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     await prisma.eventAttempt.create({
       data: {
         eventId: id,
-        attemptNumber: 2,
+        attemptNumber: 7,
         status: AttemptStatus.FAILED,
         errorType: AttemptErrorType.PERMANENT,
-        failedReason: 'seeded-2',
+        failedReason: 'seeded-7',
       },
     });
 
@@ -217,10 +236,15 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
 
     const numbers = body.attempts.map((a) => a.attemptNumber);
     expect(numbers).toEqual([...numbers].sort((a, b) => a - b));
-    expect(numbers).toContain(2);
-    expect(numbers).toContain(9);
-    expect(body.attempts[0].failedReason).toBe('seeded-2');
-    expect(body.attempts[1].failedReason).toBe('seeded-9');
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 7, 9]);
+    // The boundary re-sorted the out-of-order inserts alongside the worker's
+    // exhausted transient trail (attempts 1–5 are all FAILED/TEMPORARY).
+    expect(body.attempts.find((a) => a.attemptNumber === 7)!.failedReason).toBe(
+      'seeded-7',
+    );
+    expect(body.attempts.find((a) => a.attemptNumber === 9)!.failedReason).toBe(
+      'seeded-9',
+    );
   });
 
   it('returns the structured 404 for an unknown id (no mutation)', async () => {
