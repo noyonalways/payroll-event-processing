@@ -57,3 +57,32 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 - [x] Processing consistency (exactly-once transactional write)
 - [x] Per-employee event ordering (parallel across employees)
 - [x] Extensible handler/strategy pattern for new event types
+
+---
+
+## Feature Queue (next changes — work top-down, one at a time)
+
+Proposed after the turborepo workspace conversion. Rationale for ordering: 1-4 form the
+product spine (browse -> recover -> real employees -> real business effects); 5-6 are the
+integration story; 7-9 unlock multi-user completion of the tenancy model; 10-12 are hardening
+and housekeeping. Each becomes one OpenSpec change via `/opsx:propose` -> `/opsx:apply`.
+
+| # | Change Name (kebab-case) | Summary | Status |
+|---|---|---|---|
+| 1 | `events-list-api` | `GET /events` with cursor pagination + filters (status, event type, employee, date range) and a server-driven Events page in the UI; the first way to browse event history | Queued |
+| 2 | `event-recovery-actions` | Retry a failed event, cancel a queued one, dead-letter view; manual actions recorded in `event_attempts`/audit | Queued |
+| 3 | `employee-directory` | Org-scoped `employees` table + CRUD; `employeeId` validated against it (no more free-form strings) | Queued |
+| 4 | `domain-effects` | Handlers write real effective-dated state (compensation, bank account, address, department) inside the claim transaction — events gain a business effect | Queued |
+| 5 | `realtime-status` | SSE stream replacing UI polling for lifecycle status | Queued |
+| 6 | `integrator-webhooks` | Signed webhooks on terminal states via a transactional outbox (written with the terminal state, per D7's take on the same pattern) | Queued |
+| 7 | `role-enforcement` | RBAC guards on endpoints using the existing OWNER/ADMIN/MEMBER roles | Queued |
+| 8 | `org-membership-management` | Invitations, member list, role changes (API + UI) — the way a second user joins an organization | Queued |
+| 9 | `real-provider-adapter` | Replace the simulated provider behind the handler registry; per-organization external endpoint config | Queued |
+| 10 | `observability` | Prometheus/OpenTelemetry metrics, error tracking (Sentry), queue-depth alerting | Queued |
+| 11 | `auth-hardening` | Password reset, account lockout, rate limiting (`@nestjs/throttler`), refresh-token retention sweep | Queued |
+| 12 | `spec-sync` | Fix two known spec/code drifts: `event-processing` (every processing attempt is now recorded) and pre-monorepo doc remnants | Queued |
+
+Notes:
+- 3 should land before 4 (domain effects want a real employee to attach to).
+- Deliberately not queued here: TypeScript version unification and remote Turborepo caching — both are
+  open questions from the workspace design and start as their own changes after the feature spine.
