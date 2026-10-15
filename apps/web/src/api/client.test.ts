@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearSession, getSession, setSession } from '../lib/session';
 import { TRACKED_EVENTS_STORAGE_KEY } from '../lib/storage';
 import type { TrackedEvent } from '../lib/storage';
-import type { ErrorResponseDto, SessionResponse } from '../lib/types';
+import type { ErrorResponseBody } from '@repo/shared';
+import type { SessionResponse } from '../lib/types';
 import { login, logout } from './auth';
 import {
   API_BASE_URL,
@@ -25,7 +26,7 @@ function unauthorized(): Response {
   return jsonResponse(unauthorizedBody(), 401);
 }
 
-function unauthorizedBody(): ErrorResponseDto {
+function unauthorizedBody(): ErrorResponseBody {
   return {
     statusCode: 401,
     message: 'Unauthorized',

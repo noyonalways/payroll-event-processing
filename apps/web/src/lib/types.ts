@@ -1,17 +1,33 @@
 /**
- * Client-side mirror of the API contracts this app consumes — the
- * `event-submission` (POST /events) and `event-status-api` (GET /events/{id})
- * capabilities plus the global structured error body. Kept in the frontend so
- * the UI never imports from the backend codebase.
+ * The API contracts this app consumes — the `event-submission` (POST /events)
+ * and `event-status-api` (GET /events/{id}) capabilities. The event-type
+ * contract and the structured error body are the workspace's single copies in
+ * `@repo/shared` (design D2); only response types the backend expresses as
+ * classes (DTOs) are mirrored here.
  */
+import { EventType as SharedEventType } from '@repo/shared';
 
-export const EVENT_TYPES = [
-  'BANK_ACCOUNT_CHANGE',
-  'ADDRESS_CHANGE',
-  'SALARY_CHANGE',
-] as const;
+/**
+ * The UI-wide event-type type: the literal union of the shared contract's
+ * values, derived (not redefined) from the shared enum, so the demo form keeps
+ * literal-based typing and a new backend event type surfaces here
+ * automatically. Its form metadata is then forced by
+ * `Record<EventType, FieldSpec[]>` in `lib/eventTypes.ts`.
+ */
+export type EventType = `${SharedEventType}`;
 
-export type EventType = (typeof EVENT_TYPES)[number];
+/**
+ * The event types the demo form offers. Enum-derived rather than hand-written,
+ * so the UI can no longer drift from what the API accepts.
+ */
+export const EVENT_TYPES: readonly EventType[] = Object.values(
+  SharedEventType,
+) as EventType[];
+
+/**
+ * The payload interface mirrors of the backend payload DTOs, plus the union
+ * the submit/status bodies carry.
+ */
 
 /** Payload contract of `BANK_ACCOUNT_CHANGE` (event-submission). */
 export interface BankAccountChangePayload {
@@ -38,10 +54,18 @@ export interface SalaryChangePayload {
   currency: string;
 }
 
+/** Payload contract of `DEPARTMENT_CHANGE` (event-submission). */
+export interface DepartmentChangePayload {
+  employeeId: string;
+  effectiveDate: string;
+  newDepartment: string;
+}
+
 export type EventPayload =
   | BankAccountChangePayload
   | AddressChangePayload
-  | SalaryChangePayload;
+  | SalaryChangePayload
+  | DepartmentChangePayload;
 
 /** Lifecycle statuses reported by GET /events/{id}. */
 export type LifecycleStatus =
@@ -89,15 +113,6 @@ export interface EventStatusResponse {
   processedAt: string | null;
   result: Record<string, unknown> | null;
   attempts: EventAttempt[];
-}
-
-/** Structured error body produced by the API's global HttpExceptionFilter. */
-export interface ErrorResponseDto {
-  statusCode: number;
-  message: string | string[];
-  error: string;
-  timestamp: string;
-  path: string;
 }
 
 /** Role held within an organization (mirrors the Prisma membership enum). */

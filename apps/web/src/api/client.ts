@@ -1,6 +1,7 @@
 import { clearSession, getSession, setSession } from '../lib/session';
 import { clearTrackedEvents } from '../lib/storage';
-import type { ErrorResponseDto, SessionResponse } from '../lib/types';
+import type { ErrorResponseBody } from '@repo/shared';
+import type { SessionResponse } from '../lib/types';
 
 /**
  * Base origin of the payroll API. Configurable at build time via
@@ -18,13 +19,13 @@ function messageText(message: string | string[]): string {
 
 /**
  * Raised for any non-2xx API response, carrying the structured
- * `ErrorResponseDto` body produced by the global HttpExceptionFilter.
+ * `ErrorResponseBody` produced by the global HttpExceptionFilter.
  */
 export class ApiError extends Error {
   readonly statusCode: number;
-  readonly body: ErrorResponseDto;
+  readonly body: ErrorResponseBody;
 
-  constructor(statusCode: number, body: ErrorResponseDto) {
+  constructor(statusCode: number, body: ErrorResponseBody) {
     super(messageText(body.message));
     this.name = 'ApiError';
     this.statusCode = statusCode;
@@ -53,9 +54,9 @@ export class SessionExpiredError extends Error {
 }
 
 /** Parse a non-2xx response body defensively into the documented shape. */
-async function parseErrorBody(res: Response): Promise<ErrorResponseDto> {
+async function parseErrorBody(res: Response): Promise<ErrorResponseBody> {
   try {
-    const body = (await res.json()) as Partial<ErrorResponseDto>;
+    const body = (await res.json()) as Partial<ErrorResponseBody>;
     return {
       statusCode: body.statusCode ?? res.status,
       message: body.message ?? `Request failed with status ${res.status}`,

@@ -1,4 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
+// The shape is owned once, in @repo/shared (design D2); this decorated class is
+// its Swagger face in core.
+import { ErrorResponseBody } from '@repo/shared';
 
 /**
  * Structured error body produced by the global HttpExceptionFilter.
@@ -6,7 +9,7 @@ import { ApiProperty } from '@nestjs/swagger';
  * `message` is a plain string for simple errors (e.g. a missing Idempotency-Key)
  * or an array of `"field: message"` strings for class-validator failures.
  */
-export class ErrorResponseDto {
+export class ErrorResponseDto implements ErrorResponseBody {
   @ApiProperty({ example: 400, description: 'HTTP status code' })
   statusCode!: number;
 

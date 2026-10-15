@@ -2,10 +2,12 @@
  * Public surface of @repo/shared — the values more than one deployable has to
  * agree on (design D2): the supported event types, the queue name and job name,
  * the idempotency constants and header contract, the processing result type,
- * the processing error classes, and the demo-scenario mapping. None of these
- * needs Nest, Prisma, or Redis (verified in the extraction task 6.4).
+ * the processing error classes, the structured error body, and the
+ * demo-scenario mapping. None of these needs Nest, Prisma, or Redis (verified
+ * in the extraction task 6.4 and re-checked for the UI adoption in task 9).
  */
 export { EventType } from './event-type';
+export type { ErrorResponseBody } from './error-response-body';
 export { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from './queue.constants';
 export {
   IDEMPOTENCY_HEADER,

@@ -1,10 +1,13 @@
 import type { EventPayload, EventType } from './types';
 
 /**
- * Client-side mirror of the backend `payload-registry`: the exact required
- * field set per event type (event-submission contract). Single source of truth
- * for form rendering and payload construction so the UI can never drift from
- * what the API accepts.
+ * Which fields each event type collects, and how the demo form renders them.
+ * The event-type contract itself is the single workspace copy in
+ * `@repo/shared` (design D2); this module owns only the form metadata for it:
+ * the exact required field set per type (mirroring the backend
+ * `payload-registry` DTOs) as labels, kinds and pre-fill defaults. Keyed by the
+ * shared-derived `EventType` (see lib/types.ts), so a new backend event type
+ * forces a spec here instead of silently drifting from what the API accepts.
  */
 
 export type FieldValueKind = 'text' | 'date' | 'number';
@@ -121,6 +124,29 @@ export const EVENT_FIELD_SPECS: Record<EventType, FieldSpec[]> = {
       kind: 'text',
       required: true,
       defaultValue: 'EUR',
+    },
+  ],
+  DEPARTMENT_CHANGE: [
+    {
+      name: 'employeeId',
+      label: 'Employee ID',
+      kind: 'text',
+      required: true,
+      defaultValue: 'EMP-001',
+    },
+    {
+      name: 'effectiveDate',
+      label: 'Effective date',
+      kind: 'date',
+      required: true,
+      defaultValue: '2026-09-01',
+    },
+    {
+      name: 'newDepartment',
+      label: 'New department',
+      kind: 'text',
+      required: true,
+      defaultValue: 'Engineering',
     },
   ],
 };

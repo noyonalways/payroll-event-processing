@@ -7,6 +7,9 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+// Type-only import: the body shape is the single workspace copy in @repo/shared
+// (design D2 — the UI's hand-written duplicate of it was deleted in task 9).
+import { ErrorResponseBody } from '@repo/shared';
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -19,12 +22,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const status = exception.getStatus ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     const exceptionResponse = exception.getResponse();
 
-    const message =
+    const message: string | string[] =
       typeof exceptionResponse === 'object' && 'message' in exceptionResponse
-        ? (exceptionResponse as Record<string, unknown>).message
+        ? ((exceptionResponse as Record<string, unknown>).message as string | string[])
         : exception.message;
 
-    const errorBody = {
+    const errorBody: ErrorResponseBody = {
       statusCode: status,
       message,
       error: exception.name,
