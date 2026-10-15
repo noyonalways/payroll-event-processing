@@ -35,12 +35,12 @@ services:
   api:
     build:
       context: .
-      dockerfile: docker/Dockerfile.api
+      dockerfile: apps/api/Dockerfile
       target: prod
     container_name: payroll_api
     restart: unless-stopped
     env_file:
-      - .env.development
+      - apps/api/.env.development
     environment:
       # Compose-network topology: containers reach the DB/Redis by service name,
       # while host runs use the localhost values from .env.development.
@@ -70,12 +70,12 @@ services:
   worker:
     build:
       context: .
-      dockerfile: docker/Dockerfile.worker
+      dockerfile: apps/worker/Dockerfile
       target: prod
     container_name: payroll_worker
     restart: unless-stopped
     env_file:
-      - .env.development
+      - apps/api/.env.development
     environment:
       DATABASE_URL: postgresql://payroll:payroll@postgres:5432/payroll?schema=public
       REDIS_HOST: redis
@@ -95,7 +95,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.frontend
+      dockerfile: apps/web/Dockerfile
       args:
         # Bake-time API origin; default matches dev mode (host runs on :3000).
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}

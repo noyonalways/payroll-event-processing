@@ -2,23 +2,33 @@ services:
   api:
     build:
       target: dev
+    # Dev mounts only SOURCE directories (never manifests or node_modules): the
+    # image carries the full filtered install and the compiled internal
+    # packages, so the container's pnpm never re-resolves the workspace under
+    # (and conflicts with) the host's store. Editing app or package source
+    # triggers the entrypoint's nest watch; package builds are covered by
+    # `turbo watch` on the host (design D6's documented loop).
     volumes:
-      - .:/app
-      - /app/node_modules
+      - ./apps/api/src:/repo/apps/api/src
+      - ./packages/core/src:/repo/packages/core/src
+      - ./packages/database/src:/repo/packages/database/src
+      - ./packages/shared/src:/repo/packages/shared/src
     environment:
       NODE_ENV: development
     # Dev mode must ALSO apply pending migrations before starting — on a fresh
     # (empty) Postgres volume the tables would otherwise never be created.
     # prisma migrate deploy is concurrency-safe (advisory lock), so api and
     # worker running it together at startup is fine.
-    command: ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec npm run dev"]
+    command: ["sh", "-c", "pnpm --filter @repo/database exec prisma migrate deploy && exec pnpm --filter @repo/api dev"]
 
   worker:
     build:
       target: dev
     volumes:
-      - .:/app
-      - /app/node_modules
+      - ./apps/worker/src:/repo/apps/worker/src
+      - ./packages/core/src:/repo/packages/core/src
+      - ./packages/database/src:/repo/packages/database/src
+      - ./packages/shared/src:/repo/packages/shared/src
     environment:
       NODE_ENV: development
-    command: ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec npm run dev:worker"]
+    command: ["sh", "-c", "pnpm --filter @repo/database exec prisma migrate deploy && exec pnpm --filter @repo/worker dev"]

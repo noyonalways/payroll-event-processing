@@ -1,17 +1,30 @@
-node_modules
-dist
+# Workspace layout: dependency installs and build outputs are created inside
+# the images, never sent from the host.
+**/node_modules
+**/dist
+**/.turbo
 .git
 .gitignore
+# Stage env files are host-local configuration (design D7); the template ships.
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
 coverage
 *.log
 .DS_Store
+# Repo tooling and documentation have nothing to do in a build context.
 openspec
+openspec_roadmap.md
+docs
+.github
 .agent
+.agents
 .claude
 .cursor
 .opencode
-frontend/node_modules
-frontend/dist
+.zcode
+skills-lock.json
+data
+pgdata
