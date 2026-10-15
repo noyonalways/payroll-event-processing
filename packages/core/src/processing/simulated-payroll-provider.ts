@@ -1,19 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import {
-  DEMO_FAIL_THRESHOLD_ATTEMPT,
-  DEMO_PACING_MAX_MS,
-  DEMO_PACING_MIN_MS,
-  DEMO_RECOVER_THRESHOLD_ATTEMPT,
-  demoScenarioFor,
-} from './demo-scenarios';
-import {
-  PermanentPayrollFailureError,
-  TransientPayrollFailureError,
-} from './errors/payroll-processing.error';
-
-/** How the simulated provider decides each call's outcome (design D2). */
+import { DEMO_FAIL_THRESHOLD_ATTEMPT, DEMO_PACING_MAX_MS, DEMO_PACING_MIN_MS, DEMO_RECOVER_THRESHOLD_ATTEMPT, demoScenarioFor, PermanentPayrollFailureError, TransientPayrollFailureError } from '@repo/shared';/** How the simulated provider decides each call's outcome (design D2). */
 export type PayrollFailureMode =
   | 'random'
   | 'always-success'

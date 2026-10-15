@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
-import { PAYROLL_EVENTS_QUEUE } from './queue.constants';
+import { PAYROLL_EVENTS_QUEUE } from '@repo/shared';
 
 /**
  * Registers the BullMQ root config (Redis connection) and the `payroll-events`

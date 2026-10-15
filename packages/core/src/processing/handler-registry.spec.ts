@@ -4,7 +4,7 @@ import { AddressChangeHandler } from './handlers/address-change.handler';
 import { DepartmentChangeHandler } from './handlers/department-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
 import { FailureConfig, SimulatedPayrollProvider } from './simulated-payroll-provider';
-import { EventType } from '../events/event-type';
+import { EventType } from '@repo/shared';
 
 describe('HandlerRegistry', () => {
   const provider = new SimulatedPayrollProvider(

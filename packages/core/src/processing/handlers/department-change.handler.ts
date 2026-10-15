@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PayrollEventStrategy } from '../payroll-event.strategy';
-import { HandlerInput, ProcessingResult } from '../processing.types';
+import { HandlerInput, ProcessingResult } from '@repo/shared';
 import { SimulatedPayrollProvider } from '../simulated-payroll-provider';
 
 interface DepartmentChangePayload {

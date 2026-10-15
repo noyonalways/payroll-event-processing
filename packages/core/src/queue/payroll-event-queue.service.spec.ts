@@ -2,9 +2,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { PayrollEventQueueService, perEmployeeJobId } from './payroll-event-queue.service';
-import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from '@repo/database';
-import { EventType } from '../events/event-type';
-
+import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB, EventType } from '@repo/shared';
 const ORG = 'org-a';
 const OTHER_ORG = 'org-b';
 

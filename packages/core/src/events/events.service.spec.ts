@@ -5,9 +5,7 @@ import { PayloadValidator } from './payload.validator';
 import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
-import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';
-import { EventType } from './event-type';
-
+import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 const ORG = 'org-a';
 const OTHER_ORG = 'org-b';
 

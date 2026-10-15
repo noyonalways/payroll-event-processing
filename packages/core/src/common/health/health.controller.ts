@@ -5,7 +5,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Queue } from 'bullmq';
 import { PrismaService } from '@repo/database';
 import { createClient } from 'redis';
-import { PAYROLL_EVENTS_QUEUE } from '@repo/database';
+import { PAYROLL_EVENTS_QUEUE } from '@repo/shared';
 import { Public } from '../../auth/decorators/public.decorator';
 import { HealthResponseDto } from './health-response.dto';
 import { WorkerLivenessDto } from './worker-liveness.dto';

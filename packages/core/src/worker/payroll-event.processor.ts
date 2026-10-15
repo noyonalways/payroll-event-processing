@@ -8,15 +8,10 @@ import {
   PayrollEventQueueService,
   PayrollEventJobInput,
 } from '../queue/payroll-event-queue.service';
-import {
-  PAYROLL_EVENTS_QUEUE,
-  PAYROLL_EVENT_JOB,
-} from '@repo/database';
+import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB, TransientPayrollFailureError } from '@repo/shared';
 import { WORKER_OPTIONS } from '@repo/database';
 import { EventClaim } from '../processing/event-claim';
 import { HeartbeatService } from '../processing/heartbeat.service';
-import { TransientPayrollFailureError } from '../processing/errors/payroll-processing.error';
-
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
  *

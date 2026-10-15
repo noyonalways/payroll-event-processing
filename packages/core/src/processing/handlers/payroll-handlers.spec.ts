@@ -3,10 +3,7 @@ import { AddressChangeHandler } from './address-change.handler';
 import { DepartmentChangeHandler } from './department-change.handler';
 import { SalaryChangeHandler } from './salary-change.handler';
 import { FailureConfig, SimulatedPayrollProvider } from '../simulated-payroll-provider';
-import { HandlerInput } from '../processing.types';
-import { EventType } from '../../events/event-type';
-
-/**
+import { HandlerInput, EventType } from '@repo/shared';/**
  * Per-type handler tests use the real provider with the deterministic
  * always-success override, so the result's acknowledged fields are exactly
  * observable.

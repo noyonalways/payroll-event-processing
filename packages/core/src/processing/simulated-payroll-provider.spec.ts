@@ -1,16 +1,10 @@
 import { ConfigService } from '@nestjs/config';
-import { demoScenarioFor } from './demo-scenarios';
+import { demoScenarioFor, PermanentPayrollFailureError, TransientPayrollFailureError } from '@repo/shared';
 import {
   FailureConfig,
   PayrollFailureMode,
   SimulatedPayrollProvider,
-} from './simulated-payroll-provider';
-import {
-  PermanentPayrollFailureError,
-  TransientPayrollFailureError,
-} from './errors/payroll-processing.error';
-
-describe('SimulatedPayrollProvider', () => {
+} from './simulated-payroll-provider';describe('SimulatedPayrollProvider', () => {
   const provider = (mode: PayrollFailureMode, temporary = 0.25, permanent = 0.05) =>
     new SimulatedPayrollProvider(new FailureConfig(temporary, permanent, mode));
 

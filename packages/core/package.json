@@ -26,6 +26,7 @@
     "@nestjs/platform-express": "^11.0.0",
     "@nestjs/swagger": "^11.4.7",
     "@prisma/client": "^6.0.0",
+    "@repo/shared": "workspace:*",
     "@repo/database": "workspace:*",
     "bullmq": "^5.81.3",
     "class-transformer": "^0.5.1",

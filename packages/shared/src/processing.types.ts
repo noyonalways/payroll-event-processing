@@ -1,4 +1,4 @@
-import { EventType } from '../events/event-type';
+import { EventType } from './event-type';
 
 /**
  * The context a worker hands to a processing handler. The handler sees the

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { PayloadValidator } from './payload.validator';
-import { EventType } from './event-type';
+import { EventType } from '@repo/shared';
 
 /**
  * DTO-level validation, exercised through the real PayloadValidator

@@ -6,7 +6,7 @@ import { AuthenticatedActor } from '../auth/authenticated-actor';
 import { EventsController } from './events.controller';
 import { EventsService, SubmissionResult } from './events.service';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
-import { EventType } from './event-type';
+import { EventType } from '@repo/shared';
 
 const ACTOR: AuthenticatedActor = {
   userId: 'user-1',

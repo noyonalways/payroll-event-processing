@@ -2,10 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
-import { EventType } from '../events/event-type';
-import { TransientPayrollFailureError } from './errors/payroll-processing.error';
-import { ProcessingResult } from './processing.types';
-
+import { EventType, TransientPayrollFailureError, ProcessingResult } from '@repo/shared';
 /**
  * Outcome of `claimAndProcess`. Only `permanent-failure` and `success` carry a
  * payload for the caller's log lines; `skipped` means the job was stale or a

@@ -24,7 +24,7 @@ import { AuthenticatedActor } from '../auth/authenticated-actor';
 import { CurrentActor } from '../auth/decorators/current-actor.decorator';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { IdempotencyKey } from '../common/idempotency/idempotency-key.decorator';
-import { IDEMPOTENCY_HEADER } from '../common/idempotency/idempotency.constants';
+import { IDEMPOTENCY_HEADER } from '@repo/shared';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EVENT_EXAMPLES } from './dto/event-examples';
 import { EventSubmissionResponseDto } from './dto/event-submission-response.dto';

@@ -25,6 +25,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@prisma/client": "^6.0.0",
+    "@repo/shared": "workspace:*",
     "bullmq": "^5.81.3"
   },
   "devDependencies": {

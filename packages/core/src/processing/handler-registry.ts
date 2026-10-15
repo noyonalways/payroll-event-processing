@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EventType } from '../events/event-type';
+import { EventType } from '@repo/shared';
 import { PayrollEventStrategy } from './payroll-event.strategy';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';

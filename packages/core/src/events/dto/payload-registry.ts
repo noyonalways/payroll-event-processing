@@ -1,4 +1,4 @@
-import { EventType } from '../event-type';
+import { EventType } from '@repo/shared';
 import { AddressChangePayloadDto } from './payloads/address-change.dto';
 import { BankAccountChangePayloadDto } from './payloads/bank-account-change.dto';
 import { DepartmentChangePayloadDto } from './payloads/department-change.dto';

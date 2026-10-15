@@ -1,9 +1,6 @@
 import { BadRequestException, createParamDecorator } from '@nestjs/common';
 import { Request } from 'express';
-import {
-  IDEMPOTENCY_KEY_MAX_LENGTH,
-  IDEMPOTENCY_KEY_PRINTABLE_ASCII,
-} from './idempotency.constants';
+import { IDEMPOTENCY_KEY_MAX_LENGTH, IDEMPOTENCY_KEY_PRINTABLE_ASCII } from '@repo/shared';
 
 /**
  * Reads the `Idempotency-Key` request header, validates it (required, trimmed,

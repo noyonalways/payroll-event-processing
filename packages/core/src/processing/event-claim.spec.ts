@@ -2,13 +2,7 @@ import { EventClaim } from './event-claim';
 import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
 import { EventStatus } from '@prisma/client';
-import { EventType } from '../events/event-type';
-import {
-  TransientPayrollFailureError,
-  PermanentPayrollFailureError,
-} from './errors/payroll-processing.error';
-import { ProcessingResult } from './processing.types';
-
+import { EventType, TransientPayrollFailureError, PermanentPayrollFailureError, ProcessingResult } from '@repo/shared';
 const ORG = 'org-a';
 const OTHER_ORG = 'org-b';
 

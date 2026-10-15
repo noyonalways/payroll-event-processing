@@ -9,4 +9,3 @@ export { PrismaModule } from './prisma/prisma.module';
 export { PrismaService } from './prisma/prisma.service';
 export { QueueModule } from './queue/queue.module';
 export { WORKER_OPTIONS } from './queue/worker-options';
-export { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from './queue/queue.constants';

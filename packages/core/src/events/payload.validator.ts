@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { EventType } from './event-type';
+import { EventType } from '@repo/shared';
 import { PayloadDtoRegistry } from './dto/payload-registry';
 
 /**

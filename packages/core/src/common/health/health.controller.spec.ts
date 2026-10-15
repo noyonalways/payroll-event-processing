@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
 import { HealthController } from './health.controller';
 import { PrismaService } from '@repo/database';
-import { PAYROLL_EVENTS_QUEUE } from '@repo/database';
+import { PAYROLL_EVENTS_QUEUE } from '@repo/shared';
 
 // Mock the redis module to avoid real connections in unit tests
 jest.mock('redis', () => ({
