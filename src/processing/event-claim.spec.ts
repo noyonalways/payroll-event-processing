@@ -1,5 +1,5 @@
 import { EventClaim } from './event-claim';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
 import { EventStatus } from '@prisma/client';
 import { EventType } from '../events/event-type';

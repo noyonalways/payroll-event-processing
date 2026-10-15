@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EventStatus, Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
 import { EventType } from '../events/event-type';
 import { TransientPayrollFailureError } from './errors/payroll-processing.error';

@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { MembershipRole, Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { AuthService } from './auth.service';
 import { AuthenticatedActor } from './authenticated-actor';
 import { PasswordService } from './password.service';

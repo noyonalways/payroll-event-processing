@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 
 const IDEMPOTENCY_DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 

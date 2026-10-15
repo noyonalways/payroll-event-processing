@@ -2,8 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
 import { HealthController } from './health.controller';
-import { PrismaService } from '../../prisma/prisma.service';
-import { PAYROLL_EVENTS_QUEUE } from '../../queue/queue.constants';
+import { PrismaService } from '@repo/database';
+import { PAYROLL_EVENTS_QUEUE } from '@repo/database';
 
 // Mock the redis module to avoid real connections in unit tests
 jest.mock('redis', () => ({

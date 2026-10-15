@@ -2,7 +2,7 @@ import { HttpStatus, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventsService, CreateEventInput } from './events.service';
 import { PayloadValidator } from './payload.validator';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';

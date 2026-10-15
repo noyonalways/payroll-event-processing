@@ -1,7 +1,7 @@
 import { Injectable, Logger, HttpStatus, NotFoundException } from '@nestjs/common';
 import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';

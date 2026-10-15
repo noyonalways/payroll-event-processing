@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { IdempotencySweeper } from './idempotency.sweeper';
 
 describe('IdempotencySweeper', () => {

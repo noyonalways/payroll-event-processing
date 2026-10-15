@@ -1,6 +1,6 @@
 import * as os from 'os';
 import { HeartbeatService } from './heartbeat.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { ConfigService } from '@nestjs/config';
 
 /**

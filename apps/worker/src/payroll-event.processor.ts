@@ -3,7 +3,7 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EventStatus, AttemptStatus, AttemptErrorType } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../../src/prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import {
   PayrollEventQueueService,
   PayrollEventJobInput,
@@ -11,8 +11,8 @@ import {
 import {
   PAYROLL_EVENTS_QUEUE,
   PAYROLL_EVENT_JOB,
-} from '../../../src/queue/queue.constants';
-import { WORKER_OPTIONS } from '../../../src/queue/worker-options';
+} from '@repo/database';
+import { WORKER_OPTIONS } from '@repo/database';
 import { EventClaim } from '../../../src/processing/event-claim';
 import { HeartbeatService } from '../../../src/processing/heartbeat.service';
 import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';

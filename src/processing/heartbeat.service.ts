@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as os from 'os';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 
 /**
  * Worker liveness heartbeat (design D4). An unref'd `setInterval` bumps

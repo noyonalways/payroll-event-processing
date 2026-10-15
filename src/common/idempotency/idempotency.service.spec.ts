@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { IdempotencyService } from './idempotency.service';
 
 type MockTx = {

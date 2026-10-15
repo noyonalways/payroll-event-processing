@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
-import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from './queue.constants';
+import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from '@repo/database';
 
 export interface PayrollEventJobInput {
   eventId: string;

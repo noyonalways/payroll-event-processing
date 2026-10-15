@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { MembershipRole } from '@prisma/client';
 import { createHash } from 'crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { TokenService } from './token.service';
 
 const USER_ID = 'user-1';

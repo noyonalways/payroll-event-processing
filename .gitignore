@@ -9,6 +9,9 @@ build/
 .next/
 out/
 
+# Turborepo local task cache
+.turbo/
+
 # Env
 .env
 .env.*

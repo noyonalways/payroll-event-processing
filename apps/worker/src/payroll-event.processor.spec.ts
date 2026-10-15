@@ -1,7 +1,7 @@
 import { PayrollEventProcessor } from './payroll-event.processor';
-import { PrismaService } from '../../../src/prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../../../src/queue/payroll-event-queue.service';
-import { PAYROLL_EVENT_JOB } from '../../../src/queue/queue.constants';
+import { PAYROLL_EVENT_JOB } from '@repo/database';
 import { EventStatus } from '@prisma/client';
 import { EventType } from '../../../src/events/event-type';
 import { EventClaim } from '../../../src/processing/event-claim';

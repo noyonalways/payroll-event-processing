@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { Membership, MembershipRole, Organization, Prisma, User } from '@prisma/client';
 import { randomBytes } from 'crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import { AuthenticatedActor } from './authenticated-actor';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';

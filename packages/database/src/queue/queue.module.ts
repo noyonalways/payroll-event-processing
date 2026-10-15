@@ -2,13 +2,19 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { PAYROLL_EVENTS_QUEUE } from './queue.constants';
-import { PayrollEventQueueService } from './payroll-event-queue.service';
 
 /**
  * Registers the BullMQ root config (Redis connection) and the `payroll-events`
  * queue. Consumed by BOTH Nest applications — the API (to enqueue on submit)
  * and the worker (to consume). Each process registers its own forRoot config
  * against the same Redis instance.
+ *
+ * This module is only the OUTBOUND connection (design D3): it re-exports
+ * `BullModule`, which carries the registered queue token so `@InjectQueue`
+ * resolves in importing modules. The producer (`PayrollEventQueueService`) and
+ * the per-employee FIFO/relay semantics are business logic — they stay with the
+ * application code in `@repo/core`, which provides them through its own
+ * `PayrollEventQueueModule` instantiated on top of this registration.
  */
 @Module({
   imports: [
@@ -24,7 +30,6 @@ import { PayrollEventQueueService } from './payroll-event-queue.service';
     }),
     BullModule.registerQueue({ name: PAYROLL_EVENTS_QUEUE }),
   ],
-  providers: [PayrollEventQueueService],
-  exports: [PayrollEventQueueService, BullModule],
+  exports: [BullModule],
 })
 export class QueueModule {}

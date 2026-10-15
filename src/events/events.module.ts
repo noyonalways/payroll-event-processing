@@ -2,11 +2,11 @@ import { Module } from '@nestjs/common';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { PayloadValidator } from './payload.validator';
-import { QueueModule } from '../queue/queue.module';
+import { PayrollEventQueueModule } from '../queue/payroll-event-queue.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 
 @Module({
-  imports: [QueueModule, IdempotencyModule],
+  imports: [PayrollEventQueueModule, IdempotencyModule],
   controllers: [EventsController],
   providers: [EventsService, PayloadValidator],
 })

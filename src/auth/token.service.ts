@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { MembershipRole } from '@prisma/client';
 import { createHash, randomBytes } from 'crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '@repo/database';
 import {
   ACCESS_TOKEN_TYPE,
   AUTH_DEFAULT_ACCESS_TTL,

@@ -1,8 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
-import { PrismaModule } from './prisma/prisma.module';
-import { QueueModule } from './queue/queue.module';
+import { PrismaModule, QueueModule } from '@repo/database';
 import { HealthModule } from './common/health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
