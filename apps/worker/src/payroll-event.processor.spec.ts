@@ -9,6 +9,9 @@ import { HeartbeatService } from '../../../src/processing/heartbeat.service';
 import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
 import { ConfigService } from '@nestjs/config';
 
+const ORG = 'org-a';
+const OTHER_ORG = 'org-b';
+
 /**
  * Direct-instantiation unit tests. The processor must not touch `WorkerHost.worker`
  * at construction (BullRegistrar only populates it during Nest's onModuleInit), so
@@ -25,8 +28,12 @@ import { ConfigService } from '@nestjs/config';
  *
  * FIFO continuation is driven by the BullMQ `completed` event (NOT from inside
  * `process()` — while `process()` runs the job is still active and its own
- * `jobId = employeeId` would suppress the relay's add). Tests therefore call
+ * tenant-qualified `jobId` would suppress the relay's add). Tests therefore call
  * `processor.onCompleted(job)` for the relay assertions.
+ *
+ * Every statement is scoped by the organization carried in the job data, so the
+ * processor can only ever touch rows belonging to the tenant the producer
+ * enqueued the job for.
  */
 describe('PayrollEventProcessor', () => {
   let processor: PayrollEventProcessor;
@@ -55,6 +62,7 @@ describe('PayrollEventProcessor', () => {
       name: PAYROLL_EVENT_JOB,
       data: {
         eventId: 'evt-1',
+        organizationId: ORG,
         eventType: EventType.BANK_ACCOUNT_CHANGE,
         employeeId: 'emp-1',
         sequence: 1,
@@ -98,20 +106,21 @@ describe('PayrollEventProcessor', () => {
       await processor.process(job());
 
       // The received → queued ensure stays OUTSIDE the transaction: it is the
-      // only updateMany the processor issues itself.
+      // only updateMany the processor issues itself — and it is tenant-scoped.
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledTimes(1);
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
-        where: { id: 'evt-1', status: EventStatus.RECEIVED },
+        where: { id: 'evt-1', organizationId: ORG, status: EventStatus.RECEIVED },
         data: { status: EventStatus.QUEUED },
       });
 
       expect(heartbeat.touch).toHaveBeenCalledTimes(1);
 
       // The whole claim → dispatch → terminal-write lifecycle went through
-      // EventClaim with the identity + 1-based attempt number.
+      // EventClaim with the identity, the organization, and the 1-based attempt.
       expect(eventClaim.claimAndProcess).toHaveBeenCalledTimes(1);
       expect(eventClaim.claimAndProcess).toHaveBeenCalledWith({
         eventId: 'evt-1',
+        organizationId: ORG,
         eventType: EventType.BANK_ACCOUNT_CHANGE,
         employeeId: 'emp-1',
         sequence: 1,
@@ -236,28 +245,44 @@ describe('PayrollEventProcessor', () => {
   describe('exhausted-retry handler — @OnWorkerEvent("failed") (R1, D4, R5)', () => {
     const transientError = new TransientPayrollFailureError('down');
 
+    const exhaustedJob = {
+      name: PAYROLL_EVENT_JOB,
+      data: {
+        eventId: 'evt-x',
+        organizationId: ORG,
+        employeeId: 'emp-x',
+        eventType: EventType.SALARY_CHANGE,
+        sequence: 3,
+      },
+      attemptsMade: 5,
+      opts: { attempts: 5 },
+    } as never;
+
+    const midRetryJob = {
+      name: PAYROLL_EVENT_JOB,
+      data: {
+        eventId: 'evt-y',
+        organizationId: ORG,
+        employeeId: 'emp-y',
+        eventType: EventType.ADDRESS_CHANGE,
+        sequence: 1,
+      },
+      attemptsMade: 2,
+      opts: { attempts: 5 },
+    } as never;
+
     it('writes failed row + FAILED(TEMPORARY) attempt row in ONE $transaction array when exhausted', async () => {
       // job.attemptsMade >= job.opts.attempts → exhausted (5 attempts ran).
-      const exhaustedJob = {
-        name: PAYROLL_EVENT_JOB,
-        data: {
-          eventId: 'evt-x',
-          employeeId: 'emp-x',
-          eventType: EventType.SALARY_CHANGE,
-          sequence: 3,
-        },
-        attemptsMade: 5,
-        opts: { attempts: 5 },
-      } as never;
-
       await processor.onFailed(exhaustedJob, transientError);
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       const ops = prisma.$transaction.mock.calls[0][0] as unknown[];
       expect(ops).toHaveLength(2);
 
+      // The terminal write is tenant-scoped: a job can only fail a row in its
+      // own organization.
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
-        where: { id: 'evt-x', status: EventStatus.QUEUED },
+        where: { id: 'evt-x', organizationId: ORG, status: EventStatus.QUEUED },
         data: { status: EventStatus.FAILED },
       });
       // The audit row records the FINAL attempt that consumed the retries. It
@@ -282,17 +307,6 @@ describe('PayrollEventProcessor', () => {
 
     it('logs an exhausted entry at error level when all attempts are consumed', async () => {
       const logSpy = jest.spyOn(processor['logger'], 'error');
-      const exhaustedJob = {
-        name: PAYROLL_EVENT_JOB,
-        data: {
-          eventId: 'evt-x',
-          employeeId: 'emp-x',
-          eventType: EventType.SALARY_CHANGE,
-          sequence: 3,
-        },
-        attemptsMade: 5,
-        opts: { attempts: 5 },
-      } as never;
 
       await processor.onFailed(exhaustedJob, transientError);
 
@@ -300,18 +314,6 @@ describe('PayrollEventProcessor', () => {
     });
 
     it('is a no-op (no DB write) when there are remaining attempts (mid-retry)', async () => {
-      const midRetryJob = {
-        name: PAYROLL_EVENT_JOB,
-        data: {
-          eventId: 'evt-y',
-          employeeId: 'emp-y',
-          eventType: EventType.ADDRESS_CHANGE,
-          sequence: 1,
-        },
-        attemptsMade: 2,
-        opts: { attempts: 5 },
-      } as never;
-
       await processor.onFailed(midRetryJob, transientError);
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -325,6 +327,7 @@ describe('PayrollEventProcessor', () => {
         name: 'some-other-job',
         data: {
           eventId: 'evt-z',
+          organizationId: ORG,
           employeeId: 'emp-z',
           eventType: EventType.ADDRESS_CHANGE,
           sequence: 1,
@@ -387,6 +390,7 @@ describe('PayrollEventProcessor', () => {
 
       expect(prisma.payrollEvent.findFirst).toHaveBeenCalledWith({
         where: {
+          organizationId: ORG,
           employeeId: 'emp-1',
           id: { not: 'evt-1' },
           status: { in: [EventStatus.RECEIVED, EventStatus.QUEUED] },
@@ -401,6 +405,7 @@ describe('PayrollEventProcessor', () => {
       });
       expect(queueService.enqueue).toHaveBeenCalledWith({
         eventId: 'evt-2',
+        organizationId: ORG,
         eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
         sequence: 2, // Number(bigint) — JSON-safe job payload
@@ -431,6 +436,25 @@ describe('PayrollEventProcessor', () => {
           where: expect.objectContaining({ employeeId: 'emp-1' }),
         }),
       );
+    });
+
+    it('does not relay another organization’s pending event for the same employee', async () => {
+      // Organization B has a pending event for emp-1, but the completed job
+      // belongs to organization A: the lookup is tenant-scoped, so a completion
+      // in one tenant can never schedule another tenant's work.
+      prisma.payrollEvent.findFirst.mockResolvedValue(null);
+
+      await processor.onCompleted(job({ organizationId: OTHER_ORG }));
+
+      expect(prisma.payrollEvent.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: OTHER_ORG,
+            employeeId: 'emp-1',
+          }),
+        }),
+      );
+      expect(queueService.enqueue).not.toHaveBeenCalled();
     });
 
     it('a failed relay never fails (throws) the completion handler', async () => {

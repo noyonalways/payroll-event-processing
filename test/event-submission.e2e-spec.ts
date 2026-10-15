@@ -6,10 +6,17 @@ import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../src/common/idempotency/idempotency.constants';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { registerTenant, TestTenant } from './support/auth';
 
 /**
  * E2E for the event submission contract — runs against real Postgres
  * (Docker `postgres` service, reached via localhost from the host).
+ *
+ * Every submission is made by an authenticated organization: `POST /events` is
+ * tenant-scoped, so the suite registers a real tenant through the HTTP surface
+ * and reuses its token. The organization is therefore part of every assertion —
+ * including the idempotency record, whose identity is
+ * `(organization_id, scope, key)`.
  *
  * Environment: process.env.DATABASE_URL is set in test/setup-env.ts because
  * the in-process Prisma client does not auto-load .env.
@@ -17,6 +24,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 describe('POST /events (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
 
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -37,6 +45,7 @@ describe('POST /events (e2e)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'submit');
   });
 
   beforeEach(async () => {
@@ -50,7 +59,8 @@ describe('POST /events (e2e)', () => {
     await app.close();
   });
 
-  const http = () => request(app.getHttpServer());
+  /** Authenticated POST /events — the tenant's token is always attached. */
+  const submit = () => request(app.getHttpServer()).post('/events').set(tenant.headers);
   const key = () => randomUUID();
   const employee = (prefix = 'emp') => `${prefix}-${randomUUID()}`;
 
@@ -91,6 +101,28 @@ describe('POST /events (e2e)', () => {
     },
   });
 
+  describe('authentication is required', () => {
+    it('rejects a submission with a valid key but no access token', async () => {
+      await request(app.getHttpServer())
+        .post('/events')
+        .set('Idempotency-Key', key())
+        .send(bankAccount())
+        .expect(401);
+
+      // Nothing was persisted for the rejected attempt.
+      expect(await prisma.payrollEvent.count({})).toBe(0);
+    });
+
+    it('rejects a submission with a tampered token', async () => {
+      await request(app.getHttpServer())
+        .post('/events')
+        .set('Idempotency-Key', key())
+        .set('Authorization', `Bearer ${tenant.accessToken}tampered`)
+        .send(bankAccount())
+        .expect(401);
+    });
+  });
+
   describe('201 submissions', () => {
     it.each([
       ['BANK_ACCOUNT_CHANGE', bankAccount],
@@ -98,27 +130,29 @@ describe('POST /events (e2e)', () => {
       ['SALARY_CHANGE', salaryChange],
       ['DEPARTMENT_CHANGE', departmentChange],
     ])('%s returns 201 { id, status: "received" }', async (_name, body) => {
-      const res = await http()
-        .post('/events')
-        .set('Idempotency-Key', key())
-        .send(body())
-        .expect(201);
+      const res = await submit().set('Idempotency-Key', key()).send(body()).expect(201);
 
       expect(res.body).toEqual({
         id: expect.any(String),
         status: 'received',
       });
     });
+
+    it('records the caller’s organization on the persisted row', async () => {
+      const res = await submit().set('Idempotency-Key', key()).send(bankAccount()).expect(201);
+
+      const row = await prisma.payrollEvent.findUnique({ where: { id: res.body.id } });
+      expect(row?.organizationId).toBe(tenant.organizationId);
+    });
   });
 
   describe('400 validation', () => {
     it('rejects a missing Idempotency-Key header', async () => {
-      await http().post('/events').send(bankAccount()).expect(400);
+      await submit().send(bankAccount()).expect(400);
     });
 
     it('rejects an unsupported eventType', async () => {
-      await http()
-        .post('/events')
+      await submit()
         .set('Idempotency-Key', key())
         .send({ eventType: 'NONSENSE_EVENT', payload: {} })
         .expect(400);
@@ -128,43 +162,27 @@ describe('POST /events (e2e)', () => {
       const body = bankAccount();
       delete (body.payload as Record<string, unknown>).iban;
 
-      await http()
-        .post('/events')
-        .set('Idempotency-Key', key())
-        .send(body)
-        .expect(400);
+      await submit().set('Idempotency-Key', key()).send(body).expect(400);
     });
 
     it('rejects a missing DEPARTMENT_CHANGE required field', async () => {
       const body = departmentChange();
       delete (body.payload as Record<string, unknown>).newDepartment;
 
-      await http()
-        .post('/events')
-        .set('Idempotency-Key', key())
-        .send(body)
-        .expect(400);
+      await submit().set('Idempotency-Key', key()).send(body).expect(400);
     });
 
     it('rejects an unknown payload field', async () => {
       const body = salaryChange();
       (body.payload as Record<string, unknown>).bonus = 1_000;
 
-      await http()
-        .post('/events')
-        .set('Idempotency-Key', key())
-        .send(body)
-        .expect(400);
+      await submit().set('Idempotency-Key', key()).send(body).expect(400);
     });
 
     it('rejects an unknown top-level field', async () => {
       const body = { ...bankAccount(), bogus: true };
 
-      await http()
-        .post('/events')
-        .set('Idempotency-Key', key())
-        .send(body)
-        .expect(400);
+      await submit().set('Idempotency-Key', key()).send(body).expect(400);
     });
   });
 
@@ -173,20 +191,17 @@ describe('POST /events (e2e)', () => {
       const immutable = key();
       const body = bankAccount();
 
-      const first = await http()
-        .post('/events')
-        .set('Idempotency-Key', immutable)
-        .send(body)
-        .expect(201);
-      const second = await http()
-        .post('/events')
+      const first = await submit().set('Idempotency-Key', immutable).send(body).expect(201);
+      const second = await submit()
         .set('Idempotency-Key', immutable)
         .send({ ...body, payload: { ...body.payload } }) // same content, new object
         .expect(201);
 
       expect(second.body).toEqual(first.body);
       expect(
-        await prisma.payrollEvent.count({ where: { idempotencyKey: immutable } }),
+        await prisma.payrollEvent.count({
+          where: { idempotencyKey: immutable, organizationId: tenant.organizationId },
+        }),
       ).toBe(1);
     });
 
@@ -194,39 +209,35 @@ describe('POST /events (e2e)', () => {
       const reusable = key();
       const body = bankAccount();
 
-      const first = await http()
-        .post('/events')
-        .set('Idempotency-Key', reusable)
-        .send(body)
-        .expect(201);
+      const first = await submit().set('Idempotency-Key', reusable).send(body).expect(201);
 
       // Force expiry at the record level. A small IDEMPOTENCY_TTL_SECONDS override
       // can't steer one test: @nestjs/config snapshots process.env at import time,
       // and this direct update is deterministic and scoped to this key.
       const forced = await prisma.idempotencyRecord.update({
         where: {
-          scope_key: { scope: IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, key: reusable },
+          organizationId_scope_key: {
+            organizationId: tenant.organizationId,
+            scope: IDEMPOTENCY_SCOPE_EVENT_SUBMISSION,
+            key: reusable,
+          },
         },
         data: { expiresAt: new Date(Date.now() - 1_000) },
       });
       expect(forced.expiresAt.getTime()).toBeLessThan(Date.now()); // setup applied
 
-      const second = await http()
-        .post('/events')
-        .set('Idempotency-Key', reusable)
-        .send(body)
-        .expect(201);
+      const second = await submit().set('Idempotency-Key', reusable).send(body).expect(201);
 
       // Expired → treated as absent → a fresh event row and a fresh id.
       expect(second.body.id).not.toBe(first.body.id);
       expect(second.body).toEqual({ id: second.body.id, status: 'received' });
       expect(
-        await prisma.payrollEvent.count({ where: { idempotencyKey: reusable } }),
+        await prisma.payrollEvent.count({
+          where: { idempotencyKey: reusable, organizationId: tenant.organizationId },
+        }),
       ).toBe(2);
-      // The (scope, key) record was replaced, not duplicated.
-      expect(
-        await prisma.idempotencyRecord.count({ where: { key: reusable } }),
-      ).toBe(1);
+      // The (organization, scope, key) record was replaced, not duplicated.
+      expect(await prisma.idempotencyRecord.count({ where: { key: reusable } })).toBe(1);
     });
 
     it('handles concurrent duplicate submissions: one row, both get a stored response', async () => {
@@ -234,15 +245,17 @@ describe('POST /events (e2e)', () => {
       const body = bankAccount();
 
       const [a, b] = await Promise.all([
-        http().post('/events').set('Idempotency-Key', immutable).send(body),
-        http().post('/events').set('Idempotency-Key', immutable).send(body),
+        submit().set('Idempotency-Key', immutable).send(body),
+        submit().set('Idempotency-Key', immutable).send(body),
       ]);
 
       expect(a.status).toBe(201);
       expect(b.status).toBe(201);
       expect(a.body).toEqual(b.body);
       expect(
-        await prisma.payrollEvent.count({ where: { idempotencyKey: immutable } }),
+        await prisma.payrollEvent.count({
+          where: { idempotencyKey: immutable, organizationId: tenant.organizationId },
+        }),
       ).toBe(1);
     });
   });
@@ -251,8 +264,7 @@ describe('POST /events (e2e)', () => {
     it('increments sequence for a single employee', async () => {
       const employeeId = employee('seq');
       for (const k of [key(), key()]) {
-        await http()
-          .post('/events')
+        await submit()
           .set('Idempotency-Key', k)
           .send({
             eventType: 'BANK_ACCOUNT_CHANGE',
@@ -266,7 +278,7 @@ describe('POST /events (e2e)', () => {
       }
 
       const rows = await prisma.payrollEvent.findMany({
-        where: { employeeId },
+        where: { employeeId, organizationId: tenant.organizationId },
         orderBy: { sequence: 'asc' },
       });
       expect(rows).toHaveLength(2);
@@ -279,8 +291,7 @@ describe('POST /events (e2e)', () => {
       const e2 = employee('ind');
 
       const submitOne = async (employeeId: string) =>
-        http()
-          .post('/events')
+        submit()
           .set('Idempotency-Key', key())
           .send({
             eventType: 'ADDRESS_CHANGE',
@@ -298,8 +309,12 @@ describe('POST /events (e2e)', () => {
       await submitOne(e1);
       await submitOne(e2);
 
-      const s1 = await prisma.payrollEvent.findFirst({ where: { employeeId: e1 } });
-      const s2 = await prisma.payrollEvent.findFirst({ where: { employeeId: e2 } });
+      const s1 = await prisma.payrollEvent.findFirst({
+        where: { employeeId: e1, organizationId: tenant.organizationId },
+      });
+      const s2 = await prisma.payrollEvent.findFirst({
+        where: { employeeId: e2, organizationId: tenant.organizationId },
+      });
       expect(s1?.sequence).toBe(1n);
       expect(s2?.sequence).toBe(1n);
     });

@@ -7,6 +7,9 @@ type MockTx = {
   idempotencyRecord: { create: jest.Mock; deleteMany: jest.Mock };
 };
 
+const ORG = 'org-a';
+const OTHER_ORG = 'org-b';
+
 describe('IdempotencyService', () => {
   let service: IdempotencyService;
   const tx: MockTx = {
@@ -41,6 +44,10 @@ describe('IdempotencyService', () => {
     ...overrides,
   });
 
+  const compositeKey = (organizationId: string, scope: string, key: string) => ({
+    organizationId_scope_key: { organizationId, scope, key },
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     config.get.mockReturnValue(undefined); // default TTL
@@ -54,7 +61,7 @@ describe('IdempotencyService', () => {
     it('serves a non-expired stored response without invoking op', async () => {
       prisma.idempotencyRecord.findUnique.mockResolvedValue(stored());
 
-      const result = await service.execute('event-submission', 'k-1', op);
+      const result = await service.execute(ORG, 'event-submission', 'k-1', op);
 
       expect(op).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -63,7 +70,7 @@ describe('IdempotencyService', () => {
         body: { id: 'evt-1', status: 'received' },
       });
       expect(prisma.idempotencyRecord.findUnique).toHaveBeenCalledWith({
-        where: { scope_key: { scope: 'event-submission', key: 'k-1' } },
+        where: compositeKey(ORG, 'event-submission', 'k-1'),
       });
     });
   });
@@ -73,12 +80,13 @@ describe('IdempotencyService', () => {
       prisma.idempotencyRecord.findUnique.mockResolvedValue(null);
       tx.idempotencyRecord.create.mockResolvedValue({});
 
-      const result = await service.execute('event-submission', 'k-1', op);
+      const result = await service.execute(ORG, 'event-submission', 'k-1', op);
 
       expect(op).toHaveBeenCalledTimes(1);
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(tx.idempotencyRecord.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
+          organizationId: ORG,
           scope: 'event-submission',
           key: 'k-1',
           responseStatus: 201,
@@ -98,7 +106,7 @@ describe('IdempotencyService', () => {
       op.mockRejectedValueOnce(boom);
 
       await expect(
-        service.execute('event-submission', 'k-1', op),
+        service.execute(ORG, 'event-submission', 'k-1', op),
       ).rejects.toThrow(boom);
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
@@ -114,12 +122,14 @@ describe('IdempotencyService', () => {
       tx.idempotencyRecord.deleteMany.mockResolvedValue({ count: 1 });
       tx.idempotencyRecord.create.mockResolvedValue({});
 
-      const result = await service.execute('sub', 'k-expired', op);
+      const result = await service.execute(ORG, 'sub', 'k-expired', op);
 
       // The expired row must be made absent before the create, or the reuse
-      // would P2002 against UNIQUE (scope, key) and serve the old response.
+      // would P2002 against UNIQUE (organization_id, scope, key) and serve the
+      // old response.
       expect(tx.idempotencyRecord.deleteMany).toHaveBeenCalledWith({
         where: {
+          organizationId: ORG,
           scope: 'sub',
           key: 'k-expired',
           expiresAt: { lt: expect.any(Date) },
@@ -149,10 +159,11 @@ describe('IdempotencyService', () => {
         }),
       );
 
-      const result = await service.execute('sub', 'k-expired-race', op);
+      const result = await service.execute(ORG, 'sub', 'k-expired-race', op);
 
       expect(tx.idempotencyRecord.deleteMany).toHaveBeenCalledWith({
         where: {
+          organizationId: ORG,
           scope: 'sub',
           key: 'k-expired-race',
           expiresAt: { lt: expect.any(Date) },
@@ -182,11 +193,14 @@ describe('IdempotencyService', () => {
         }),
       );
 
-      const result = await service.execute('event-submission', 'k-race', op);
+      const result = await service.execute(ORG, 'event-submission', 'k-race', op);
 
       // The loser's op ran inside the aborted transaction; the winner's response
       // is served with no second insert.
       expect(op).toHaveBeenCalledTimes(1);
+      expect(prisma.idempotencyRecord.findUnique).toHaveBeenNthCalledWith(2, {
+        where: compositeKey(ORG, 'event-submission', 'k-race'),
+      });
       expect(result).toEqual({
         status: 200,
         body: { id: 'evt-winner', status: 'received' },
@@ -199,15 +213,58 @@ describe('IdempotencyService', () => {
       prisma.idempotencyRecord.findUnique.mockResolvedValue(null);
       tx.idempotencyRecord.create.mockResolvedValue({});
 
-      await service.execute('scope-a', 'k', op);
-      await service.execute('scope-b', 'k', op);
+      await service.execute(ORG, 'scope-a', 'k', op);
+      await service.execute(ORG, 'scope-b', 'k', op);
 
       expect(op).toHaveBeenCalledTimes(2);
       expect(prisma.idempotencyRecord.findUnique).toHaveBeenNthCalledWith(1, {
-        where: { scope_key: { scope: 'scope-a', key: 'k' } },
+        where: compositeKey(ORG, 'scope-a', 'k'),
       });
       expect(prisma.idempotencyRecord.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { scope_key: { scope: 'scope-b', key: 'k' } },
+        where: compositeKey(ORG, 'scope-b', 'k'),
+      });
+    });
+  });
+
+  describe('organization isolation', () => {
+    it('looks records up per organization, not by key alone', async () => {
+      prisma.idempotencyRecord.findUnique.mockResolvedValue(null);
+      tx.idempotencyRecord.create.mockResolvedValue({});
+
+      await service.execute(ORG, 'event-submission', 'k', op);
+      await service.execute(OTHER_ORG, 'event-submission', 'k', op);
+
+      // Both ran: a key used by one organization must not suppress the other's
+      // operation, and must never serve the other's stored response body.
+      expect(op).toHaveBeenCalledTimes(2);
+      expect(prisma.idempotencyRecord.findUnique).toHaveBeenNthCalledWith(1, {
+        where: compositeKey(ORG, 'event-submission', 'k'),
+      });
+      expect(prisma.idempotencyRecord.findUnique).toHaveBeenNthCalledWith(2, {
+        where: compositeKey(OTHER_ORG, 'event-submission', 'k'),
+      });
+      expect(tx.idempotencyRecord.create).toHaveBeenNthCalledWith(1, {
+        data: expect.objectContaining({ organizationId: ORG, key: 'k' }),
+      });
+      expect(tx.idempotencyRecord.create).toHaveBeenNthCalledWith(2, {
+        data: expect.objectContaining({ organizationId: OTHER_ORG, key: 'k' }),
+      });
+    });
+
+    it('does not replay one organization’s stored response into another', async () => {
+      // The other organization has a record; this organization's lookup misses.
+      prisma.idempotencyRecord.findUnique.mockImplementation(
+        async ({ where }: { where: { organizationId_scope_key: { organizationId: string } } }) =>
+          where.organizationId_scope_key.organizationId === OTHER_ORG ? stored() : null,
+      );
+      tx.idempotencyRecord.create.mockResolvedValue({});
+
+      const result = await service.execute(ORG, 'event-submission', 'k', op);
+
+      expect(op).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        status: 201,
+        body: { id: 'evt-1', status: 'received' },
       });
     });
   });

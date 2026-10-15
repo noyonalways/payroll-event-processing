@@ -148,3 +148,6 @@ jobs:
           DATABASE_URL: postgresql://payroll:payroll@localhost:5432/payroll?schema=public
           REDIS_HOST: localhost
           REDIS_PORT: "6379"
+          # AUTH_JWT_SECRET is REQUIRED with no default — the app refuses to boot
+          # without a signing key — so this job supplies a throwaway one.
+          AUTH_JWT_SECRET: ci-e2e-only-jwt-secret-not-a-deployment-secret

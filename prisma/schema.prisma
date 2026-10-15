@@ -1,5 +1,6 @@
 // This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// learn more about it in the documentation:
+// https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -9,6 +10,104 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ─── Tenancy & identity ───────────────────────────────────────────────────────
+// Multi-tenancy model: ONE shared schema with an `organization_id` discriminator
+// on every tenant-owned row (rather than schema-per-tenant or database-per-tenant).
+// Isolation is enforced in the application layer: the caller's organization comes
+// from a signed access token, and every tenant-scoped read/write carries it in its
+// WHERE clause. Postgres-level RLS is a deliberate later hardening step (design D3).
+
+/// A tenant. Every payroll event, idempotency record, and membership belongs to
+/// exactly one organization; no query may cross the boundary.
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  /// URL-safe unique handle (login/URLs). Stored lowercased.
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships        Membership[]
+  events             PayrollEvent[]
+  idempotencyRecords IdempotencyRecord[]
+  refreshTokens      RefreshToken[]
+
+  @@map("organizations")
+}
+
+/// A person who can authenticate. Users are global (not nested under an
+/// organization) because one person may belong to several organizations; the
+/// `memberships` row is what binds them to a tenant and carries their role.
+model User {
+  id           String   @id @default(uuid())
+  /// Stored lowercased; the unique index is the account-identity arbiter.
+  email        String   @unique
+  /// scrypt digest (`scrypt$N$r$p$salt$hash`). Never a plaintext or reversible value.
+  passwordHash String   @map("password_hash")
+  name         String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+/// Membership role within ONE organization.
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+/// Binds a user to an organization with a role. This row — not the access token
+/// alone — is the authority for "may this user act in this organization": the
+/// refresh path re-validates it, so a revoked membership stops being usable
+/// within one access-token lifetime (design D4).
+model Membership {
+  id             String         @id @default(uuid())
+  userId         String         @map("user_id")
+  organizationId String         @map("organization_id")
+  role           MembershipRole @default(MEMBER)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+/// One issued refresh token, stored as a SHA-256 hash (never the token itself).
+/// Rotation revokes the presented row and issues a new one; `revokedAt` also
+/// makes reuse-after-rotation detectable (design D5).
+///
+/// The organization is part of the session, not a parameter of the refresh call:
+/// a refresh token can only ever mint an access token for the tenant it was issued
+/// for, so a stolen token cannot be replayed against a different organization.
+model RefreshToken {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  organizationId String    @map("organization_id")
+  tokenHash      String    @unique @map("token_hash")
+  expiresAt      DateTime  @map("expires_at")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ─── Payroll event processing ─────────────────────────────────────────────────
 
 /// Lifecycle of a payroll event.
 /// received → queued → processing → success | failed
@@ -21,11 +120,17 @@ enum EventStatus {
 }
 
 /// One submitted payroll event. Per-employee ordering is enforced by
-/// UNIQUE (employee_id, sequence); idempotency is enforced by the shared
-/// idempotency_records store (UNIQUE (scope, key)), NOT by this table.
-/// idempotency_key is retained as a non-unique index for traceability only.
+/// UNIQUE (organization_id, employee_id, sequence); idempotency is enforced by the
+/// shared idempotency_records store (UNIQUE (organization_id, scope, key)), NOT by
+/// this table. idempotency_key is retained as a non-unique index for traceability.
+///
+/// `employeeId` is a TENANT-LOCAL identifier (the customer's own payroll employee
+/// number), deliberately NOT a foreign key: two organizations may legitimately use
+/// the same employee number, and the composite unique key keeps their sequences
+/// independent. An organization-owned `employees` directory is a later change.
 model PayrollEvent {
   id             String      @id @default(uuid())
+  organizationId String      @map("organization_id")
   eventType      String      @map("event_type")
   employeeId     String      @map("employee_id")
   payload        Json        @db.JsonB
@@ -38,18 +143,26 @@ model PayrollEvent {
   /// Result of the simulated external payroll operation, set only on success.
   result         Json?       @map("result")
 
-  @@unique([employeeId, sequence])
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  attempts     EventAttempt[]
+
+  @@unique([organizationId, employeeId, sequence])
+  @@index([organizationId, status])
+  @@index([organizationId, employeeId, createdAt])
   @@index([idempotencyKey])
-  @@index([status])
-  @@index([employeeId, createdAt])
   @@map("payroll_events")
 }
 
-/// Shared idempotency store: one record per (scope, key) carrying the stored
-/// HTTP response, with TTL expiry. The UNIQUE (scope, key) constraint is the
-/// arbiter of idempotency for any endpoint that adopts the layer.
+/// Shared idempotency store: one record per (organization, scope, key) carrying the
+/// stored HTTP response, with TTL expiry. The UNIQUE (organization_id, scope, key)
+/// constraint is the arbiter of idempotency for any endpoint that adopts the layer.
+///
+/// The organization is part of the key by construction: without it, two tenants
+/// submitting the same client-chosen key value would collide, and the second tenant
+/// would be served the FIRST tenant's stored response body (design D2).
 model IdempotencyRecord {
   id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
   scope          String   @map("scope")
   key            String   @map("key")
   responseStatus Int      @map("response_status")
@@ -57,7 +170,9 @@ model IdempotencyRecord {
   expiresAt      DateTime @map("expires_at")
   createdAt      DateTime @default(now()) @map("created_at")
 
-  @@unique([scope, key])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, scope, key])
   @@index([expiresAt])
   @@map("idempotency_records")
 }
@@ -86,15 +201,21 @@ enum AttemptErrorType {
 /// that the attempt actually ran and was retried); on retry exhaustion the
 /// final attempt's row is upserted atomically with `queued → failed`. Rows are
 /// never deleted.
+///
+/// Scope is inherited from the parent event (the FK), not duplicated as an
+/// `organization_id` column: every attempt is reached through an event id that has
+/// already been tenant-validated, and the FK makes the trail impossible to orphan.
 model EventAttempt {
-  id            String             @id @default(uuid())
-  eventId       String             @map("event_id")
-  attemptNumber Int                @map("attempt_number")
+  id            String            @id @default(uuid())
+  eventId       String            @map("event_id")
+  attemptNumber Int               @map("attempt_number")
   status        AttemptStatus
-  errorType     AttemptErrorType?  @map("error_type")
-  failedReason  String?            @map("failed_reason")
+  errorType     AttemptErrorType? @map("error_type")
+  failedReason  String?           @map("failed_reason")
   result        Json?
-  createdAt     DateTime           @default(now()) @map("created_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  event PayrollEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, attemptNumber])
   @@index([eventId])
@@ -106,6 +227,9 @@ model EventAttempt {
 /// check: a worker whose `lastSeenAt` is older than `HEALTH_WORKER_STALE_MS`
 /// is reported stale and degrades the endpoint. worker_id = `WORKER_ID` env
 /// or `${hostname}:${pid}`.
+///
+/// Intentionally NOT tenant-scoped: a worker fleet is shared infrastructure that
+/// serves every organization, and liveness is an operator-level concern.
 model WorkerHeartbeat {
   workerId   String   @id @map("worker_id")
   hostname   String

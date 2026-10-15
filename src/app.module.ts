@@ -4,6 +4,7 @@ import * as Joi from 'joi';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { HealthModule } from './common/health/health.module';
+import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
 
 @Module({
@@ -38,6 +39,15 @@ import { EventsModule } from './events/events.module';
         // Worker-liveness staleness threshold for /health (design D4): a worker
         // whose last_seen_at is older than this (ms) is reported stale/degraded.
         HEALTH_WORKER_STALE_MS: Joi.number().integer().min(1000).default(15000),
+        // REQUIRED, and at least 32 chars: this key signs every access token, so
+        // a guessable or absent secret would let anyone mint a token for any
+        // organization. No default on purpose — the app must fail to boot rather
+        // than start with a known key.
+        AUTH_JWT_SECRET: Joi.string().min(32).required(),
+        // Access tokens are short-lived because revocation is by expiry only.
+        AUTH_ACCESS_TOKEN_TTL: Joi.string().default('15m'),
+        // Refresh-token lifetime; refresh tokens are revoked rows, not JWTs.
+        AUTH_REFRESH_TOKEN_TTL_DAYS: Joi.number().integer().min(1).default(30),
       }),
       validationOptions: {
         allowUnknown: true,
@@ -47,6 +57,7 @@ import { EventsModule } from './events/events.module';
     PrismaModule,
     QueueModule,
     HealthModule,
+    AuthModule,
     EventsModule,
   ],
 })

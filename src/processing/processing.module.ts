@@ -6,6 +6,7 @@ import { EventClaim } from './event-claim';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
+import { DepartmentChangeHandler } from './handlers/department-change.handler';
 
 /**
  * Processing strategies + simulated provider, shared by the worker and (when
@@ -25,6 +26,7 @@ import { SalaryChangeHandler } from './handlers/salary-change.handler';
     BankAccountChangeHandler,
     AddressChangeHandler,
     SalaryChangeHandler,
+    DepartmentChangeHandler,
   ],
   exports: [HandlerRegistry, EventClaim, SimulatedPayrollProvider, FailureConfig],
 })

@@ -6,6 +6,8 @@ import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from './queue.constants';
 
 export interface PayrollEventJobInput {
   eventId: string;
+  /** Tenant the event belongs to — the worker's tenancy boundary. */
+  organizationId: string;
   eventType: string;
   employeeId: string;
   /** JSON-safe sequence (Number(bigint)) — job data must be JSON-serializable. */
@@ -19,12 +21,14 @@ interface PayrollEventJobData extends PayrollEventJobInput {
 /**
  * Producer for the `payroll-events` queue.
  *
- * Per-employee FIFO is achieved with `jobId = employeeId`: BullMQ silently
- * ignores an `add` whose jobId already exists, so at most one job per employee
- * is in flight while different employees run in parallel. An `add` that is
- * suppressed by an existing job is NOT a lost event — the persisted row
- * (`status` + `sequence`) is the source of truth and the worker's relay
- * recovers it.
+ * Per-employee FIFO is achieved with `jobId = perEmployeeJobId(organizationId,
+ * employeeId)`: BullMQ silently ignores an `add` whose jobId already exists, so at
+ * most one job per employee is in flight while different employees run in parallel.
+ * The organization is part of the key because employee numbers are tenant-local —
+ * two organizations using the same employee number must NOT share a queue slot, or
+ * one tenant's backlog would delay the other's. An `add` that is suppressed by an
+ * existing job is NOT a lost event: the persisted row (`status` + `sequence`) is
+ * the source of truth and the worker's relay recovers it.
  *
  * Retry policy (R1): BullMQ retries transient failures with exponential
  * backoff up to `PAYROLL_MAX_RETRY_ATTEMPTS` attempts. The base delay is
@@ -32,6 +36,21 @@ interface PayrollEventJobData extends PayrollEventJobInput {
  * `baseDelay * 2^(attempt-1)`. The worker discriminates transient from
  * permanent errors and re-throws only on transient (design D1).
  */
+/**
+ * BullMQ job id for per-employee FIFO. Tenant-qualified so two organizations that
+ * happen to use the same employee number never share a queue slot.
+ *
+ * The separator is `|`, NOT `:` — BullMQ rejects a custom id containing a colon
+ * unless it splits into exactly three segments (a legacy repeatable-job
+ * compatibility check: `Custom Id cannot contain :`). Both parts are
+ * percent-encoded, so the separator cannot occur inside either one and the
+ * mapping is injective: distinct (organization, employee) pairs can never
+ * collapse onto one job id, which would silently suppress a submission.
+ */
+export function perEmployeeJobId(organizationId: string, employeeId: string): string {
+  return `${encodeURIComponent(organizationId)}|${encodeURIComponent(employeeId)}`;
+}
+
 @Injectable()
 export class PayrollEventQueueService implements OnModuleDestroy {
   private readonly logger = new Logger(PayrollEventQueueService.name);
@@ -64,7 +83,7 @@ export class PayrollEventQueueService implements OnModuleDestroy {
   async enqueue(input: PayrollEventJobInput): Promise<void> {
     const data: PayrollEventJobData = { ...input };
     const job = await this.queue.add(PAYROLL_EVENT_JOB, data, {
-      jobId: input.employeeId,
+      jobId: perEmployeeJobId(input.organizationId, input.employeeId),
       attempts: this.maxRetryAttempts,
       backoff: { type: 'exponential', delay: this.retryBaseDelayMs },
       // Completed jobs must be freed so the same jobId can be reused by the
@@ -76,7 +95,7 @@ export class PayrollEventQueueService implements OnModuleDestroy {
 
     this.logger.verbose(
       `Enqueued ${input.eventType} event ${input.eventId} for employee ` +
-        `${input.employeeId} (seq ${input.sequence})` +
+        `${input.employeeId} in organization ${input.organizationId} (seq ${input.sequence})` +
         (job ? ` — job ${job.id}` : ' — suppressed (job already present)'),
     );
   }

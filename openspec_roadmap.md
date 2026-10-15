@@ -20,6 +20,7 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 | 9 | `minimal-frontend` | React + Vite demo UI: typed submit form with demo-scenario selector (`EMP-DEMO-*`), tracked-events list with live-polling status badges (3 s), detail panel with processing result + terminal attempt trail; Vitest + Testing Library coverage | ✅ Done |
 | 10 | `test-suite` | 111 backend unit tests + 40 e2e (7 suites: submission, queue, queue-redis-down, processing/retry/exhaustion/recovery, idempotency-records, event-status, api-docs) + 52 frontend Vitest — all gated in CI | ✅ Done |
 | 11 | `ci-and-docs` | GitHub Actions CI (backend lint/unit/build · frontend lint/vitest/build · e2e against real Postgres + Redis service containers — all green on `main`), final README, architecture diagram — **Swagger/OpenAPI** (UI at /api-docs, JSON at /api-docs-json) was delivered early by change `swagger-openapi` | ✅ Done |
+| 12 | `multi-tenant-foundation` | Multi-tenancy + authentication: `organizations`/`users`/`memberships`/`refresh_tokens`; required tenant discriminator (`organization_id`) on `payroll_events` + `idempotency_records` with tenant-qualified unique keys and tenant-leading indexes; `POST /auth/register\|login\|refresh\|logout` + `GET /auth/me` (short-lived signed access JWTs, single-use rotated hashed refresh tokens, scrypt password digests); deny-by-default guard scoped by the token's organization (cross-org reads are `404`); tenant-qualified queue job ids (`org\|employee`, no colon); backfilling migration with a conditional `Legacy Tenant`; frontend sign-in + transparent refresh | ✅ Done |
 
 ---
 
@@ -42,7 +43,7 @@ Work through these **one at a time** using `/opsx:propose` → `/opsx:apply`.
 - After each `/opsx:apply`, mark the row ✅ Done.
 - The roadmap may be adjusted if implementation reveals new dependencies.
 - Primary evaluation focus: reliability concepts (items 5–7) and test quality (item 10).
-- Swagger/OpenAPI (item 11's API-docs portion) was pulled forward and shipped by change `swagger-openapi`; item 11's remaining scope (CI + final README + architecture diagram) is shipped with it now — all 11 changes are complete.
+- Swagger/OpenAPI (item 11's API-docs portion) was pulled forward and shipped by change `swagger-openapi`; item 11's remaining scope (CI + final README + architecture diagram) is shipped with it now — all 11 planned changes are complete, and `multi-tenant-foundation` (item 12) adds authentication and the organization boundary on top.
 
 ---
 

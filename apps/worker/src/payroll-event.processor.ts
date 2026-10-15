@@ -42,10 +42,14 @@ import { TransientPayrollFailureError } from '../../../src/processing/errors/pay
  *
  * FIFO continuation happens on the BullMQ `completed` event, NOT at the end of
  * `process()`: while `process()` runs the current job is still ACTIVE, so an
- * `add` with the same `jobId = employeeId` would be suppressed by its own key.
- * BullMQ moves the job to completed (freeing the key via `removeOnComplete`)
- * and only then emits `completed`, so a relay driven from that event actually
- * lands (design D2's Postgres-driven drain).
+ * `add` with the same tenant-qualified `jobId` would be suppressed
+ * by its own key. BullMQ moves the job to completed (freeing the key via
+ * `removeOnComplete`) and only then emits `completed`, so a relay driven from that
+ * event actually lands (design D2's Postgres-driven drain).
+ *
+ * The organization travels in the job data and scopes every statement here, so the
+ * worker can only ever claim, relay, or fail rows inside the tenant the producer
+ * enqueued the job for.
  *
  * Note on lifecycle: `WorkerHost.worker` is only populated by the BullRegistrar
  * during Nest's `onModuleInit` phase, so nothing here may touch `this.worker` at
@@ -85,16 +89,21 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
   /**
    * Connected by the explorer to `worker.on('completed', …)` — fires AFTER the
    * job was moved to completed and (via `removeOnComplete: true`) its jobId key
-   * freed, so the relay's `add` with `jobId = employeeId` actually lands. This is
-   * what lets one employee's queued burst drain one-at-a-time in sequence order
-   * despite producer adds being suppressed while a job is in flight (design D2).
+   * freed, so the relay's `add` with the same tenant-qualified jobId actually
+   * lands. This is what lets one employee's queued burst drain one-at-a-time in
+   * sequence order despite producer adds being suppressed while a job is in
+   * flight (design D2).
    */
   @OnWorkerEvent('completed')
   async onCompleted(job: Job<PayrollEventJobInput>): Promise<void> {
     if (job.name !== PAYROLL_EVENT_JOB) {
       return;
     }
-    await this.relayNextPending(job.data.employeeId, job.data.eventId);
+    await this.relayNextPending(
+      job.data.organizationId,
+      job.data.employeeId,
+      job.data.eventId,
+    );
   }
 
   /**
@@ -127,11 +136,11 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     // remains the backstop for infrastructure-exhausted events that recorded no
     // transient rows. The attempt number is the FINAL one (BullMQ's
     // `attemptsMade` is the 0-based count of attempts that ran = last attempt).
-    const { eventId, employeeId, eventType, sequence } = job.data;
+    const { eventId, organizationId, employeeId, eventType, sequence } = job.data;
     const finalAttempt = job.attemptsMade;
     await this.prisma.$transaction([
       this.prisma.payrollEvent.updateMany({
-        where: { id: eventId, status: EventStatus.QUEUED },
+        where: { id: eventId, organizationId, status: EventStatus.QUEUED },
         data: { status: EventStatus.FAILED },
       }),
       this.prisma.eventAttempt.upsert({
@@ -155,7 +164,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
   }
 
   async process(job: Job<PayrollEventJobInput>): Promise<void> {
-    const { eventId, employeeId, eventType, sequence } = job.data;
+    const { eventId, organizationId, employeeId, eventType, sequence } = job.data;
     const attempt = (job.attemptsMade ?? 0) + 1;
 
     // 1. Ensure `queued` — a relayed job may still find the row `received`;
@@ -163,7 +172,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     //    already did). Stays OUTSIDE the claim transaction: it is a
     //    pre-queuing make-safe, not part of the guarded lifecycle.
     await this.prisma.payrollEvent.updateMany({
-      where: { id: eventId, status: EventStatus.RECEIVED },
+      where: { id: eventId, organizationId, status: EventStatus.RECEIVED },
       data: { status: EventStatus.QUEUED },
     });
 
@@ -181,6 +190,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     try {
       const outcome = await this.eventClaim.claimAndProcess({
         eventId,
+        organizationId,
         eventType,
         employeeId,
         sequence,
@@ -276,16 +286,22 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
    * Re-schedules the next event for the employee after this job completes.
    * Querying the DB (the source of truth) with `status IN (received, queued)`
    * ordered by `sequence` means a relay picks up even events whose submission
-   * `add` was suppressed while a job was in flight. The `add` uses
-   * `jobId = employeeId`, so one land wins and concurrent relays are no-ops.
+   * `add` was suppressed while a job was in flight. The `add` uses the same
+   * tenant-qualified jobId, so one land wins and concurrent relays are no-ops.
+   *
+   * The lookup is scoped to the job's organization: employee ids are tenant-local,
+   * so relaying by employee id alone would let one tenant's completion schedule
+   * another tenant's event.
    */
   private async relayNextPending(
+    organizationId: string,
     employeeId: string,
     currentEventId: string,
   ): Promise<void> {
     try {
       const next = await this.prisma.payrollEvent.findFirst({
         where: {
+          organizationId,
           employeeId,
           id: { not: currentEventId },
           status: { in: [EventStatus.RECEIVED, EventStatus.QUEUED] },
@@ -304,11 +320,13 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       }
 
       this.logger.verbose(
-        `Relaying next ${next.eventType} event ${next.id} (seq ${next.sequence}) for employee ${employeeId}`,
+        `Relaying next ${next.eventType} event ${next.id} (seq ${next.sequence}) for ` +
+          `employee ${employeeId} in organization ${organizationId}`,
       );
 
       await this.queueService.enqueue({
         eventId: next.id,
+        organizationId,
         eventType: next.eventType,
         employeeId: next.employeeId,
         sequence: Number(next.sequence),
@@ -317,7 +335,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       // A failed relay must never fail the current job: the row stays
       // pending in Postgres and the employee's next job retries the relay.
       this.logger.error(
-        `Relay failed for employee ${employeeId} after event ${currentEventId}: ${this.errorMessage(error)}`,
+        `Relay failed for employee ${employeeId} in organization ${organizationId} after event ${currentEventId}: ${this.errorMessage(error)}`,
       );
     }
   }

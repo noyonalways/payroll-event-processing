@@ -18,7 +18,7 @@ export interface IdempotencyOpResult {
 const IDEMPOTENCY_DEFAULT_TTL_SECONDS = 86400;
 
 /**
- * Generic store-and-replay idempotency for a (scope, key) pair:
+ * Generic store-and-replay idempotency for an (organization, scope, key) triple:
  *
  *   - non-expired record → serve the stored { status, body }, `op` never runs
  *   - expired record    → treated as absent (logged distinctly), `op` runs
@@ -28,8 +28,15 @@ const IDEMPOTENCY_DEFAULT_TTL_SECONDS = 86400;
  *                         effects included) rolled back, and the winner's stored
  *                         response is served — never an error
  *
- * The UNIQUE (scope, key) constraint on idempotency_records — not this code — is
- * the arbiter of idempotency.
+ * The UNIQUE (organization_id, scope, key) constraint on idempotency_records — not
+ * this code — is the arbiter of idempotency.
+ *
+ * **Why the organization is part of the key.** Idempotency keys are chosen by
+ * clients, so they are only unique *within a tenant*. If the key were global, two
+ * organizations that happened to pick the same value would collide, and the second
+ * would be served the first organization's stored response body — a cross-tenant
+ * data leak, not merely a duplicate-suppression bug. Passing the organization as a
+ * required first argument makes that structurally impossible to forget.
  */
 @Injectable()
 export class IdempotencyService {
@@ -41,39 +48,41 @@ export class IdempotencyService {
   ) {}
 
   async execute<TOp extends IdempotencyOpResult>(
+    organizationId: string,
     scope: string,
     key: string,
     op: (tx: Prisma.TransactionClient) => Promise<TOp>,
   ): Promise<TOp> {
     const recorded = await this.prisma.idempotencyRecord.findUnique({
-      where: { scope_key: { scope, key } },
+      where: { organizationId_scope_key: { organizationId, scope, key } },
     });
 
     if (recorded) {
       if (recorded.expiresAt > new Date()) {
-        this.logDecision(scope, key, 'replay', recorded.responseStatus);
+        this.logDecision(organizationId, scope, key, 'replay', recorded.responseStatus);
         return this.asStoredResponse(recorded) as TOp;
       }
       // Observable as a distinct outcome before being treated as absent.
-      this.logDecision(scope, key, 'expired', recorded.responseStatus);
+      this.logDecision(organizationId, scope, key, 'expired', recorded.responseStatus);
     }
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         // A row seen as expired at the pre-check must be made absent before the
-        // create, or UNIQUE (scope, key) would reject the reuse. The filter keeps
-        // only still-expired rows (a concurrent winner's fresh record is untouched);
-        // when there was no record this is a no-op. Exactly-once is preserved under
-        // concurrency: two callers may both delete the same expired row and both run
-        // op, but only one create commits; the loser's state changes roll back and
-        // P2002 → the winner's fresh stored response is served below.
+        // create, or UNIQUE (organization_id, scope, key) would reject the reuse. The
+        // filter keeps only still-expired rows (a concurrent winner's fresh record is
+        // untouched); when there was no record this is a no-op. Exactly-once is
+        // preserved under concurrency: two callers may both delete the same expired
+        // row and both run op, but only one create commits; the loser's state changes
+        // roll back and P2002 → the winner's fresh stored response is served below.
         await tx.idempotencyRecord.deleteMany({
-          where: { scope, key, expiresAt: { lt: new Date() } },
+          where: { organizationId, scope, key, expiresAt: { lt: new Date() } },
         });
 
         const opResult = await op(tx);
         await tx.idempotencyRecord.create({
           data: {
+            organizationId,
             scope,
             key,
             responseStatus: opResult.status,
@@ -84,17 +93,17 @@ export class IdempotencyService {
         return opResult;
       });
 
-      this.logDecision(scope, key, 'stored', result.status);
+      this.logDecision(organizationId, scope, key, 'stored', result.status);
       return result;
     } catch (error) {
       // A concurrent duplicate raced past the pre-check: the winner's record
       // committed, ours rolled back. Serve THEIR stored response.
       if (this.isUniqueViolation(error)) {
         const winner = await this.prisma.idempotencyRecord.findUnique({
-          where: { scope_key: { scope, key } },
+          where: { organizationId_scope_key: { organizationId, scope, key } },
         });
         if (winner) {
-          this.logDecision(scope, key, 'race', winner.responseStatus);
+          this.logDecision(organizationId, scope, key, 'race', winner.responseStatus);
           return this.asStoredResponse(winner) as TOp;
         }
       }
@@ -120,19 +129,20 @@ export class IdempotencyService {
   }
 
   /**
-   * Structured observability: scope, key, outcome, and the returned HTTP status.
-   * Keys are logged; payloads and response bodies are never logged. Serialized
-   * to a single-line JSON string so one decision is one log line — passing an
-   * object makes Nest's util.inspect print a multi-line `Object(4) {…}` that
-   * interleaves with the worker's own output.
+   * Structured observability: organization, scope, key, outcome, and the returned
+   * HTTP status. Keys are logged; payloads and response bodies are never logged.
+   * Serialized to a single-line JSON string so one decision is one log line —
+   * passing an object makes Nest's util.inspect print a multi-line `Object(4) {…}`
+   * that interleaves with the worker's own output.
    */
   private logDecision(
+    organizationId: string,
     scope: string,
     key: string,
     outcome: IdempotencyOutcome,
     httpStatus: number,
   ): void {
-    const line = JSON.stringify({ scope, key, outcome, httpStatus });
+    const line = JSON.stringify({ organizationId, scope, key, outcome, httpStatus });
     if (outcome === 'expired') {
       this.logger.warn(line);
     } else {

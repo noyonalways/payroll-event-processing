@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { WorkerModule } from '../apps/worker/src/worker.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { registerTenant, TestTenant } from './support/auth';
 
 /**
  * E2E for the simulated processing failure path — REAL Postgres + REAL Redis
@@ -15,6 +16,8 @@ import { PrismaService } from '../src/prisma/prisma.service';
  * simulated provider throws on every handler call, exercising the guarded
  * `processing → failed` transition and proving the failed row is terminal:
  * `result` stays NULL, `processed_at` stays NULL, and nothing re-enqueues it.
+ * The event is submitted by a real authenticated tenant and every assertion is
+ * scoped to that tenant's organization.
  */
 jest.setTimeout(30_000);
 
@@ -22,6 +25,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
   let app: INestApplication;
   let workerApp: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
 
   beforeAll(async () => {
     // Must be set before the worker's FailureConfig factory runs (module build).
@@ -42,6 +46,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'processing');
 
     // Boot the real consumer so the queue is actually drained.
     const workerModuleRef: TestingModule = await Test.createTestingModule({
@@ -91,6 +96,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     const id = (
       await http()
         .post('/events')
+        .set(tenant.headers)
         .set('Idempotency-Key', idempotencyKey)
         .send({
           eventType: 'SALARY_CHANGE',
@@ -105,7 +111,9 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     ).body.id as string;
 
     const row = await waitFor(async () => {
-      const found = await prisma.payrollEvent.findUnique({ where: { id } });
+      const found = await prisma.payrollEvent.findFirst({
+        where: { id, organizationId: tenant.organizationId },
+      });
       return found?.status === 'FAILED' ? found : null;
     });
 
@@ -134,7 +142,9 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     // No re-enqueue loop: once FAILED the row is terminal — it must not flip
     // back to processing/success (the relay only picks non-terminal rows).
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    const after = await prisma.payrollEvent.findUnique({ where: { id } });
+    const after = await prisma.payrollEvent.findFirst({
+      where: { id, organizationId: tenant.organizationId },
+    });
     expect(after?.status).toBe('FAILED');
     expect(after?.result).toBeNull();
     expect(await prisma.eventAttempt.count({ where: { eventId: id } })).toBe(5);

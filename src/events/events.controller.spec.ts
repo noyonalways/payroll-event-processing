@@ -1,10 +1,18 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { MembershipRole } from '@prisma/client';
 import { Response } from 'express';
+import { AuthenticatedActor } from '../auth/authenticated-actor';
 import { EventsController } from './events.controller';
 import { EventsService, SubmissionResult } from './events.service';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import { EventType } from './event-type';
+
+const ACTOR: AuthenticatedActor = {
+  userId: 'user-1',
+  organizationId: 'org-a',
+  role: MembershipRole.OWNER,
+};
 
 describe('EventsController', () => {
   let controller: EventsController;
@@ -22,7 +30,7 @@ describe('EventsController', () => {
     controller = moduleRef.get<EventsController>(EventsController);
   });
 
-  it('delegates the DTO and Idempotency-Key to the service and applies the stored status', async () => {
+  it('delegates the caller’s organization, the DTO and the Idempotency-Key to the service', async () => {
     const submitted: SubmissionResult = {
       httpStatus: 201,
       body: { id: 'evt-1', status: 'received' },
@@ -32,10 +40,12 @@ describe('EventsController', () => {
     const body = await controller.create(
       { eventType: EventType.BANK_ACCOUNT_CHANGE, payload: { employeeId: 'emp-1' } },
       'k-1',
+      ACTOR,
       res,
     );
 
-    expect(eventsService.createEvent).toHaveBeenCalledWith({
+    // The organization comes from the authenticated actor — never from the body.
+    expect(eventsService.createEvent).toHaveBeenCalledWith('org-a', {
       eventType: EventType.BANK_ACCOUNT_CHANGE,
       payload: { employeeId: 'emp-1' },
       idempotencyKey: 'k-1',
@@ -55,14 +65,45 @@ describe('EventsController', () => {
     await controller.create(
       { eventType: EventType.BANK_ACCOUNT_CHANGE, payload: { employeeId: 'emp-1' } },
       'k-1',
+      ACTOR,
       res,
     );
 
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  describe('GET /events/:id (event-status-api)', () => {
-    it('returns the service result for the path id', async () => {
+  it('does not read the organization from the request body', async () => {
+    eventsService.createEvent.mockResolvedValue({
+      httpStatus: 201,
+      body: { id: 'evt-1', status: 'received' },
+    });
+
+    // A client trying to steer the tenant by smuggling an organizationId into
+    // the body must have no effect: the actor's organization is what is used.
+    await controller.create(
+      {
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        payload: { employeeId: 'emp-1' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ organizationId: 'org-attacker' } as any),
+      },
+      'k-1',
+      ACTOR,
+      res,
+    );
+
+    expect(eventsService.createEvent).toHaveBeenCalledWith(
+      'org-a',
+      expect.objectContaining({ idempotencyKey: 'k-1' }),
+    );
+    expect(eventsService.createEvent).not.toHaveBeenCalledWith(
+      'org-attacker',
+      expect.anything(),
+    );
+  });
+
+  describe('GET /events/:id (tenant-scoped status)', () => {
+    it('returns the service result for the path id within the caller’s organization', async () => {
       const status: EventStatusResponseDto = {
         id: 'evt-1',
         eventType: EventType.BANK_ACCOUNT_CHANGE,
@@ -87,9 +128,9 @@ describe('EventsController', () => {
       };
       eventsService.getEventStatus.mockResolvedValue(status);
 
-      const result = await controller.getStatus('evt-1');
+      const result = await controller.getStatus('evt-1', ACTOR);
 
-      expect(eventsService.getEventStatus).toHaveBeenCalledWith('evt-1');
+      expect(eventsService.getEventStatus).toHaveBeenCalledWith('org-a', 'evt-1');
       expect(result).toBe(status);
     });
 
@@ -97,7 +138,7 @@ describe('EventsController', () => {
       const notFound = new NotFoundException('Event with id nope not found');
       eventsService.getEventStatus.mockRejectedValue(notFound);
 
-      await expect(controller.getStatus('nope')).rejects.toBe(notFound);
+      await expect(controller.getStatus('nope', ACTOR)).rejects.toBe(notFound);
     });
   });
 });

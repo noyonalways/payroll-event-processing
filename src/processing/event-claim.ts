@@ -18,6 +18,8 @@ export type EventClaimOutcome =
 
 export interface EventClaimInput {
   eventId: string;
+  /** Tenant the event belongs to — every read/write below is scoped by it. */
+  organizationId: string;
   eventType: EventType | string;
   employeeId: string;
   /** JSON-safe sequence (Number(bigint)) — same convention as queue job data. */
@@ -44,6 +46,10 @@ export interface EventClaimInput {
  * - The row lock guarantees that even with multiple workers, contenders block
  *   on the row; their guarded claim then matches 0 rows and they apply no
  *   side effects (R3).
+ *
+ * Every statement here is scoped by BOTH `id` and `organization_id`. The job data
+ * carries the organization the producer enqueued it for, so a malformed or forged
+ * job cannot reach another tenant's row even though it names a valid event id.
  */
 @Injectable()
 export class EventClaim {
@@ -53,7 +59,7 @@ export class EventClaim {
   ) {}
 
   async claimAndProcess(input: EventClaimInput): Promise<EventClaimOutcome> {
-    const { eventId, eventType, employeeId, sequence, attempt } = input;
+    const { eventId, organizationId, eventType, employeeId, sequence, attempt } = input;
 
     // Resolve the handler BEFORE opening the transaction: an unregistered
     // event type is a config error that must fail fast (registry contract),
@@ -64,14 +70,16 @@ export class EventClaim {
     return this.prisma.$transaction(
       async (tx) => {
         // 1. Row lock (R3) — Prisma's query builder has no FOR UPDATE, so the
-        //    supported path is `$queryRaw` on the transaction client.
-        await tx.$queryRaw`SELECT id FROM payroll_events WHERE id = ${eventId} FOR UPDATE`;
+        //    supported path is `$queryRaw` on the transaction client. Scoped by
+        //    organization as well as id so a job carrying a foreign event id (a
+        //    corrupt or forged job) can never lock or mutate another tenant's row.
+        await tx.$queryRaw`SELECT id FROM payroll_events WHERE id = ${eventId} AND organization_id = ${organizationId} FOR UPDATE`;
 
         // 2. Guarded claim: only a `queued` row may be claimed. A count of 0
         //    means the row is already processing/success/failed (stale job or
         //    duplicate relay) — apply no side effects, no handler dispatch.
         const claimed = await tx.payrollEvent.updateMany({
-          where: { id: eventId, status: EventStatus.QUEUED },
+          where: { id: eventId, organizationId, status: EventStatus.QUEUED },
           data: { status: EventStatus.PROCESSING },
         });
         if (claimed.count === 0) {
@@ -80,8 +88,8 @@ export class EventClaim {
 
         // 3. Payload read inside the tx (the DB row stays the source of truth;
         //    the job data deliberately carries identity only).
-        const row = await tx.payrollEvent.findUnique({
-          where: { id: eventId },
+        const row = await tx.payrollEvent.findFirst({
+          where: { id: eventId, organizationId },
           select: { payload: true },
         });
         if (!row) {
@@ -110,7 +118,7 @@ export class EventClaim {
           }
           const reason = error instanceof Error ? error.message : String(error);
           await tx.payrollEvent.updateMany({
-            where: { id: eventId, status: EventStatus.PROCESSING },
+            where: { id: eventId, organizationId, status: EventStatus.PROCESSING },
             data: { status: EventStatus.FAILED },
           });
           await tx.eventAttempt.create({
@@ -128,7 +136,7 @@ export class EventClaim {
         // 5. Success: terminal `processing → success` + result + processed_at,
         //    and the SUCCESS attempt row, committed together (R5).
         await tx.payrollEvent.updateMany({
-          where: { id: eventId, status: EventStatus.PROCESSING },
+          where: { id: eventId, organizationId, status: EventStatus.PROCESSING },
           data: {
             status: EventStatus.SUCCESS,
             processedAt: new Date(),

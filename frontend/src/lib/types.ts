@@ -99,3 +99,38 @@ export interface ErrorResponseDto {
   timestamp: string;
   path: string;
 }
+
+/** Role held within an organization (mirrors the Prisma membership enum). */
+export type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+export interface SessionOrganization {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/** The caller's identity in a tenant, without credential material (GET /auth/me). */
+export interface ActorIdentity {
+  user: SessionUser;
+  organization: SessionOrganization;
+  role: MembershipRole;
+}
+
+/**
+ * Response of POST /auth/register, /auth/login, and /auth/refresh. The only
+ * shape that carries credentials; the refresh token in it is single-use and
+ * rotated on every refresh.
+ */
+export interface SessionResponse extends ActorIdentity {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  expiresIn: string;
+  refreshExpiresAt: string;
+}

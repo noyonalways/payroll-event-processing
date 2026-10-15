@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { WorkerModule } from '../apps/worker/src/worker.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { registerTenant, TestTenant } from './support/auth';
 
 /**
  * E2E for the full queue pipeline — REAL Postgres + REAL Redis required
@@ -15,7 +16,9 @@ import { PrismaService } from '../src/prisma/prisma.service';
  * The API module and the worker module are booted in the same process, so a
  * submission flows through the real consumer: POST → row `queued` → the
  * `PayrollEventProcessor` claims (`processing`) → succeeds (`success` +
- * `processed_at`) → relays the next pending event for the same employee.
+ * `processed_at`) → relays the next pending event for the same employee. Every
+ * submission is made by an authenticated tenant (registered through the real
+ * HTTP surface), so the pipeline is exercised exactly as a client drives it.
  *
  * Environment: process.env.DATABASE_URL / REDIS_HOST / REDIS_PORT come from
  * `.env.test` (loaded by ConfigModule once test/setup-env.ts pins NODE_ENV).
@@ -31,6 +34,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   let app: INestApplication;
   let workerApp: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
 
   beforeAll(async () => {
     // The simulated provider reads these rates at module build; pin a
@@ -54,6 +58,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'event-queue');
 
     // Boot the real consumer so the queue is actually drained.
     const workerModuleRef: TestingModule = await Test.createTestingModule({
@@ -83,6 +88,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   const submit = async (employeeId: string, idempotencyKey: string) =>
     http()
       .post('/events')
+      .set(tenant.headers)
       .set('Idempotency-Key', idempotencyKey)
       .send({
         eventType: 'BANK_ACCOUNT_CHANGE',
@@ -115,7 +121,9 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
       const id = (await submit(employeeId, idempotencyKey)).body.id as string;
 
       const row = await waitFor(async () => {
-        const found = await prisma.payrollEvent.findUnique({ where: { id } });
+        const found = await prisma.payrollEvent.findFirst({
+          where: { id, organizationId: tenant.organizationId },
+        });
         return found?.status === 'SUCCESS' ? found : null;
       });
 
@@ -155,7 +163,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
 
       const rows = await waitFor(async () => {
         const found = await prisma.payrollEvent.findMany({
-          where: { employeeId },
+          where: { employeeId, organizationId: tenant.organizationId },
           orderBy: { sequence: 'asc' },
         });
         return found.length === 3 && found.every((r) => r.status === 'SUCCESS')
@@ -167,8 +175,9 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
       expect(rows.map((r) => r.sequence)).toEqual([1n, 2n, 3n]);
 
       // FIFO: the second event is processed no earlier than the first. Because
-      // `jobId = employeeId` keeps one job in flight, the worker relays them one
-      // at a time, so processed_at is non-decreasing in sequence order.
+      // the tenant-qualified `jobId` keeps one job in flight, the
+      // worker relays them one at a time, so processed_at is non-decreasing in
+      // sequence order.
       const processedAt = rows.map((r) => r.processedAt?.getTime() ?? -1);
       for (let i = 1; i < processedAt.length; i++) {
         expect(processedAt[i]).toBeGreaterThanOrEqual(processedAt[i - 1]);

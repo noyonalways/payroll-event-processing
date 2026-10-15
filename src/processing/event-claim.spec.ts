@@ -9,17 +9,24 @@ import {
 } from './errors/payroll-processing.error';
 import { ProcessingResult } from './processing.types';
 
+const ORG = 'org-a';
+const OTHER_ORG = 'org-b';
+
 /**
  * Unit coverage for the transactional claim (design D1). `prisma.$transaction`
  * is mocked to run the interactive callback against a mock `tx` client, so each
  * assertion inspects the exact statement ORDER and DATA the transaction would
  * send to Postgres. The "rejected transaction" case proves a DB error aborts
  * (rolls back) instead of partially committing.
+ *
+ * Every statement is additionally scoped by the job's organization, so the tests
+ * also assert that the organization is bound into each WHERE clause rather than
+ * being trusted from the event id alone.
  */
 describe('EventClaim (transactional claim & process)', () => {
   const tx = {
     $queryRaw: jest.fn(),
-    payrollEvent: { updateMany: jest.fn(), findUnique: jest.fn() },
+    payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn() },
     eventAttempt: { create: jest.fn() },
   };
   const prisma = { $transaction: jest.fn() };
@@ -34,6 +41,7 @@ describe('EventClaim (transactional claim & process)', () => {
 
   const INPUT = {
     eventId: 'evt-1',
+    organizationId: ORG,
     eventType: EventType.BANK_ACCOUNT_CHANGE,
     employeeId: 'emp-1',
     sequence: 1,
@@ -64,7 +72,7 @@ describe('EventClaim (transactional claim & process)', () => {
     );
     tx.$queryRaw.mockResolvedValue([{ id: 'evt-1' }]);
     tx.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
-    tx.payrollEvent.findUnique.mockResolvedValue({
+    tx.payrollEvent.findFirst.mockResolvedValue({
       payload: successResult.acknowledged,
     });
     tx.eventAttempt.create.mockResolvedValue({ id: 'attempt-1' });
@@ -88,17 +96,26 @@ describe('EventClaim (transactional claim & process)', () => {
       expect(lockOrder).toBeLessThan(claimOrder);
     });
 
+    it('locks and claims by organization as well as event id', async () => {
+      await eventClaim.claimAndProcess(INPUT);
+
+      // Raw lock: (strings, eventId, organizationId).
+      const [, ...bound] = tx.$queryRaw.mock.calls[0];
+      expect(bound).toEqual(['evt-1', ORG]);
+
+      expect(tx.payrollEvent.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 'evt-1', organizationId: ORG, status: EventStatus.QUEUED },
+        data: { status: EventStatus.PROCESSING },
+      });
+    });
+
     it('claims, dispatches via the registry, and commits success + SUCCESS attempt row', async () => {
       const outcome = await eventClaim.claimAndProcess(INPUT);
 
       expect(outcome).toEqual({ outcome: 'success', reference: 'SIM-test-ref' });
 
-      expect(tx.payrollEvent.updateMany).toHaveBeenNthCalledWith(1, {
-        where: { id: 'evt-1', status: EventStatus.QUEUED },
-        data: { status: EventStatus.PROCESSING },
-      });
-      expect(tx.payrollEvent.findUnique).toHaveBeenCalledWith({
-        where: { id: 'evt-1' },
+      expect(tx.payrollEvent.findFirst).toHaveBeenCalledWith({
+        where: { id: 'evt-1', organizationId: ORG },
         select: { payload: true },
       });
 
@@ -115,7 +132,7 @@ describe('EventClaim (transactional claim & process)', () => {
 
       // Terminal write + attempt row, in-process (the tx commits them together).
       expect(tx.payrollEvent.updateMany).toHaveBeenNthCalledWith(2, {
-        where: { id: 'evt-1', status: EventStatus.PROCESSING },
+        where: { id: 'evt-1', organizationId: ORG, status: EventStatus.PROCESSING },
         data: {
           status: EventStatus.SUCCESS,
           processedAt: expect.any(Date),
@@ -150,7 +167,29 @@ describe('EventClaim (transactional claim & process)', () => {
 
       expect(outcome).toEqual({ outcome: 'skipped' });
       expect(tx.payrollEvent.updateMany).toHaveBeenCalledTimes(1); // claim only
-      expect(tx.payrollEvent.findUnique).not.toHaveBeenCalled();
+      expect(tx.payrollEvent.findFirst).not.toHaveBeenCalled();
+      expect(tx.eventAttempt.create).not.toHaveBeenCalled();
+      const strategy = registry.resolve.mock.results[0].value;
+      expect(strategy.handle).not.toHaveBeenCalled();
+    });
+
+    it('applies nothing when the job names another organization’s event', async () => {
+      // The event id is real, but it belongs to a different organization, so the
+      // tenant-scoped claim matches no row — exactly like a stale job.
+      tx.payrollEvent.updateMany.mockResolvedValue({ count: 0 });
+      registry.resolve.mockReturnValue(stubStrategy('success'));
+
+      const outcome = await eventClaim.claimAndProcess({
+        ...INPUT,
+        organizationId: OTHER_ORG,
+      });
+
+      expect(outcome).toEqual({ outcome: 'skipped' });
+      // The organization travels into the filter — the id alone is not authority.
+      expect(tx.payrollEvent.updateMany).toHaveBeenCalledWith({
+        where: { id: 'evt-1', organizationId: OTHER_ORG, status: EventStatus.QUEUED },
+        data: { status: EventStatus.PROCESSING },
+      });
       expect(tx.eventAttempt.create).not.toHaveBeenCalled();
       const strategy = registry.resolve.mock.results[0].value;
       expect(strategy.handle).not.toHaveBeenCalled();
@@ -193,7 +232,7 @@ describe('EventClaim (transactional claim & process)', () => {
         reason: 'business rejection',
       });
       expect(tx.payrollEvent.updateMany).toHaveBeenNthCalledWith(2, {
-        where: { id: 'evt-1', status: EventStatus.PROCESSING },
+        where: { id: 'evt-1', organizationId: ORG, status: EventStatus.PROCESSING },
         data: { status: EventStatus.FAILED },
       });
       expect(tx.eventAttempt.create).toHaveBeenCalledWith({

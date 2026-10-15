@@ -4,11 +4,15 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { setupSwagger } from '../src/common/swagger/setup-swagger';
+import { registerTenant } from './support/auth';
 
 /**
  * E2E for the additive Swagger/OpenAPI surface — asserts the always-on
- * documentation endpoints that src/main.ts wires up. Writes no rows; Postgres
- * is still booted because AppModule's PrismaService connects on module init.
+ * documentation endpoints that src/main.ts wires up. Writes no payroll rows;
+ * Postgres is still booted because AppModule's PrismaService connects on module
+ * init. One real tenant is registered through the HTTP surface first, so the
+ * docs are served by the same tenant-aware module graph the payroll routes live
+ * in (the docs endpoints themselves stay public and token-free).
  */
 describe('Swagger/OpenAPI docs (e2e)', () => {
   let app: INestApplication;
@@ -32,6 +36,7 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
     // Swagger is always on, in every environment — same call as main.ts.
     setupSwagger(app, 3000);
     await app.init();
+    await registerTenant(app, 'api-docs');
   });
 
   afterAll(async () => {
@@ -71,6 +76,11 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
         'BankAccountChangePayloadDto',
         'AddressChangePayloadDto',
         'SalaryChangePayloadDto',
+        'RegisterDto',
+        'LoginDto',
+        'RefreshTokenDto',
+        'SessionResponseDto',
+        'ActorIdentityDto',
       ]) {
         expect(doc.components.schemas).toHaveProperty(schema);
       }
@@ -87,6 +97,89 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
       expect(header).toBeDefined();
       expect(header.in).toBe('header');
       expect(header.required).toBe(true);
+    });
+  });
+
+  describe('authentication documentation', () => {
+    it('declares the bearer security scheme the protected operations reference', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      // Without this registration the operations below point at a scheme that
+      // does not exist, and Swagger UI offers no way to supply a token.
+      const scheme = doc.components.securitySchemes?.bearer;
+      expect(scheme).toBeDefined();
+      expect(scheme.type).toBe('http');
+      expect(scheme.scheme).toBe('bearer');
+    });
+
+    it('documents the five authentication operations', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      for (const [path, method] of [
+        ['/auth/register', 'post'],
+        ['/auth/login', 'post'],
+        ['/auth/refresh', 'post'],
+        ['/auth/logout', 'post'],
+        ['/auth/me', 'get'],
+      ] as const) {
+        expect(doc.paths[path]?.[method]).toBeDefined();
+      }
+
+      // The credential-acquiring operations document their body and the session
+      // they return; logout documents its 204.
+      const register = doc.paths['/auth/register'].post;
+      expect(register.requestBody).toBeDefined();
+      expect(
+        JSON.stringify(register.requestBody),
+      ).toContain('RegisterDto');
+      expect(register.responses['201']).toBeDefined();
+      expect(doc.paths['/auth/login'].post.responses['401']).toBeDefined();
+      expect(doc.paths['/auth/refresh'].post.responses['401']).toBeDefined();
+      expect(doc.paths['/auth/logout'].post.responses['204']).toBeDefined();
+    });
+
+    it('documents the session response shape', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+      const session = doc.components.schemas.SessionResponseDto;
+
+      expect(Object.keys(session.properties)).toEqual(
+        expect.arrayContaining([
+          'accessToken',
+          'refreshToken',
+          'tokenType',
+          'expiresIn',
+          'refreshExpiresAt',
+          'user',
+          'organization',
+          'role',
+        ]),
+      );
+    });
+
+    it('marks the payroll operations as bearer-secured with a documented 401', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      for (const [path, method] of [
+        ['/events', 'post'],
+        ['/events/{id}', 'get'],
+      ] as const) {
+        const op = doc.paths[path][method];
+        expect(op.security).toEqual([{ bearer: [] }]);
+        expect(op.responses['401']).toBeDefined();
+      }
+    });
+
+    it('leaves the public operations unauthenticated', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      // An orchestrator probes /health before any credential exists, and the
+      // auth entry points are how a caller obtains one.
+      expect(doc.paths['/health'].get.security).toBeUndefined();
+      for (const path of ['/auth/register', '/auth/login', '/auth/refresh', '/auth/logout']) {
+        expect(doc.paths[path].post.security).toBeUndefined();
+      }
+      // ...but /auth/me is the caller's own identity, so it IS protected.
+      expect(doc.paths['/auth/me'].get.security).toEqual([{ bearer: [] }]);
     });
   });
 });

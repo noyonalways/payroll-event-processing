@@ -1,82 +1,14 @@
+import { API_BASE_URL, ApiError, JSON_HEADERS, NetworkError, SessionExpiredError, request } from './client';
 import type {
-  ErrorResponseDto,
   EventStatusResponse,
   EventSubmissionResponse,
   SubmitEventBody,
 } from '../lib/types';
 
-/**
- * Base origin of the payroll API. Configurable at build time via
- * `VITE_API_URL` (defaults to the local dev API origin). The API has CORS
- * enabled globally, so the Vite dev server and the nginx container call it
- * directly.
- */
-export const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
-
-const JSON_HEADERS = { 'Content-Type': 'application/json' };
-
-function messageText(message: string | string[]): string {
-  return Array.isArray(message) ? message.join(' ') : message;
-}
-
-/**
- * Raised for any non-2xx API response, carrying the structured
- * `ErrorResponseDto` body produced by the global HttpExceptionFilter.
- */
-export class ApiError extends Error {
-  readonly statusCode: number;
-  readonly body: ErrorResponseDto;
-
-  constructor(statusCode: number, body: ErrorResponseDto) {
-    super(messageText(body.message));
-    this.name = 'ApiError';
-    this.statusCode = statusCode;
-    this.body = body;
-  }
-}
-
-/** The request never reached the server (network failure / CORS / DNS). */
-export class NetworkError extends Error {
-  constructor(cause?: unknown) {
-    super('Could not reach the payroll API', { cause });
-    this.name = 'NetworkError';
-  }
-}
-
-/** Parse a non-2xx response body defensively into the documented shape. */
-async function parseErrorBody(res: Response): Promise<ErrorResponseDto> {
-  try {
-    const body = (await res.json()) as Partial<ErrorResponseDto>;
-    return {
-      statusCode: body.statusCode ?? res.status,
-      message: body.message ?? `Request failed with status ${res.status}`,
-      error: body.error ?? res.statusText,
-      timestamp: body.timestamp ?? new Date().toISOString(),
-      path: body.path ?? '',
-    };
-  } catch {
-    return {
-      statusCode: res.status,
-      message: res.statusText || `Request failed with status ${res.status}`,
-      error: res.statusText,
-      timestamp: new Date().toISOString(),
-      path: '',
-    };
-  }
-}
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(url, init);
-  } catch (cause) {
-    throw new NetworkError(cause);
-  }
-  if (!res.ok) {
-    throw new ApiError(res.status, await parseErrorBody(res));
-  }
-  return (await res.json()) as T;
-}
+// The transport (token attach + refresh-once-and-retry, error normalization)
+// lives in ./client now; re-exported so existing callers keep importing the
+// error types from here.
+export { API_BASE_URL, ApiError, NetworkError, SessionExpiredError };
 
 export interface SubmitEventResult {
   /** The key that was actually sent (fresh UUID unless the caller supplied one). */

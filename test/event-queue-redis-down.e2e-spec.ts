@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { registerTenant, TestTenant } from './support/auth';
 
 /**
  * E2E for the Redis-down contract — Postgres required, Redis must NOT be
@@ -16,7 +17,8 @@ import { PrismaService } from '../src/prisma/prisma.service';
  * `201 { id, status: 'received' }`, the row must be persisted (marked `queued`),
  * and no error may surface. The stored-response short-circuit must hold too —
  * a duplicate `Idempotency-Key` returns the stored response without touching the
- * queue again.
+ * queue again. Authentication is unaffected by the dead Redis port, so the suite
+ * registers its tenant through the real HTTP surface and submits with its token.
  *
  * `.env.test` is loaded by ConfigModule, but dotenv does not override an existing
  * `process.env.REDIS_PORT`, so the override below wins while this file runs.
@@ -26,6 +28,7 @@ jest.setTimeout(30_000);
 describe('POST /events with Redis unreachable (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
   let deadPort: string;
 
   beforeAll(async () => {
@@ -47,6 +50,7 @@ describe('POST /events with Redis unreachable (e2e)', () => {
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'queue-redis-down');
   });
 
   beforeEach(async () => {
@@ -78,6 +82,7 @@ describe('POST /events with Redis unreachable (e2e)', () => {
 
       const res = await http()
         .post('/events')
+        .set(tenant.headers)
         .set('Idempotency-Key', idempotencyKey)
         .send(bankAccount(employeeId))
         .expect(201);
@@ -85,8 +90,8 @@ describe('POST /events with Redis unreachable (e2e)', () => {
       expect(res.body).toEqual({ id: expect.any(String), status: 'received' });
 
       // Row persisted and marked queued (the enqueue timed out — recoverable).
-      const row = await prisma.payrollEvent.findUnique({
-        where: { id: res.body.id },
+      const row = await prisma.payrollEvent.findFirst({
+        where: { id: res.body.id, organizationId: tenant.organizationId },
       });
       expect(row).not.toBeNull();
       expect(row?.status).toBe('QUEUED');
@@ -99,18 +104,22 @@ describe('POST /events with Redis unreachable (e2e)', () => {
 
       const first = await http()
         .post('/events')
+        .set(tenant.headers)
         .set('Idempotency-Key', idempotencyKey)
         .send(body)
         .expect(201);
       const second = await http()
         .post('/events')
+        .set(tenant.headers)
         .set('Idempotency-Key', idempotencyKey)
         .send({ ...body, payload: { ...body.payload } })
         .expect(201);
 
       expect(second.body).toEqual(first.body);
       expect(
-        await prisma.payrollEvent.count({ where: { idempotencyKey } }),
+        await prisma.payrollEvent.count({
+          where: { idempotencyKey, organizationId: tenant.organizationId },
+        }),
       ).toBe(1);
     });
   });

@@ -6,10 +6,20 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { createClient } from 'redis';
 import { PAYROLL_EVENTS_QUEUE } from '../../queue/queue.constants';
+import { Public } from '../../auth/decorators/public.decorator';
 import { HealthResponseDto } from './health-response.dto';
 import { WorkerLivenessDto } from './worker-liveness.dto';
 
+/**
+ * Liveness/health for the service and its dependencies.
+ *
+ * `@Public()` on purpose: this is the endpoint an orchestrator probes before any
+ * credential exists (container health checks, load balancers), and it exposes only
+ * infrastructure status — never tenant data. Everything else in the application is
+ * authenticated by the global guard.
+ */
 @ApiTags('health')
+@Public()
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);

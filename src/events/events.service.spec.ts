@@ -8,6 +8,9 @@ import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../common/idempotency/idempotency.constants';
 import { EventType } from './event-type';
 
+const ORG = 'org-a';
+const OTHER_ORG = 'org-b';
+
 describe('EventsService', () => {
   let service: EventsService;
 
@@ -17,7 +20,7 @@ describe('EventsService', () => {
     payrollEvent: { create: jest.fn() },
   };
   const prisma = {
-    payrollEvent: { updateMany: jest.fn(), findUnique: jest.fn() },
+    payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn() },
     eventAttempt: { findMany: jest.fn() },
   };
   const eventQueue = { enqueue: jest.fn() };
@@ -34,10 +37,16 @@ describe('EventsService', () => {
     ...overrides,
   });
 
-  // Faithful fresh-submission path: the layer runs the op against the tx.
+  // Faithful fresh-submission path: the layer runs the op against the tx with
+  // the organization it was handed.
   const freshPath = () => {
-    idempotency.execute.mockImplementation(async (_scope: string, _key: string, op: (t: typeof tx) => unknown) =>
-      op(tx),
+    idempotency.execute.mockImplementation(
+      async (
+        _organizationId: string,
+        _scope: string,
+        _key: string,
+        op: (t: typeof tx) => unknown,
+      ) => op(tx),
     );
   };
 
@@ -60,23 +69,24 @@ describe('EventsService', () => {
     tx.payrollEvent.create.mockReset();
     prisma.payrollEvent.updateMany.mockReset();
     prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
-    prisma.payrollEvent.findUnique.mockReset();
+    prisma.payrollEvent.findFirst.mockReset();
     prisma.eventAttempt.findMany.mockReset();
     eventQueue.enqueue.mockReset();
     eventQueue.enqueue.mockResolvedValue(undefined);
   });
 
   describe('new event submission', () => {
-    it('puts the insert op under the event-submission scope and returns 201', async () => {
+    it('puts the insert op under the event-submission scope for the caller’s organization and returns 201', async () => {
       freshPath();
       tx.$executeRaw.mockResolvedValue(1); // advisory lock
       tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
       tx.payrollEvent.create.mockResolvedValue({ id: 'evt-new' });
 
-      const result = await service.createEvent(input());
+      const result = await service.createEvent(ORG, input());
 
       expect(result).toEqual({ httpStatus: 201, body: { id: expect.any(String), status: 'received' } });
       expect(idempotency.execute).toHaveBeenCalledWith(
+        ORG,
         IDEMPOTENCY_SCOPE_EVENT_SUBMISSION,
         'k-1',
         expect.any(Function),
@@ -84,17 +94,18 @@ describe('EventsService', () => {
       expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1);
     });
 
-    it('inserts the event row without response columns (persistence moved to the idempotency record)', async () => {
+    it('inserts the event row with its organization and without response columns', async () => {
       freshPath();
       tx.$executeRaw.mockResolvedValue(1);
       tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
 
-      await service.createEvent(input());
+      await service.createEvent(ORG, input());
 
       const data = tx.payrollEvent.create.mock.calls[0][0].data;
       expect(data.sequence).toBe(1n);
       expect(data.idempotencyKey).toBe('k-1');
       expect(data.status).toBe('RECEIVED');
+      expect(data.organizationId).toBe(ORG);
       expect(data).not.toHaveProperty('responseStatus');
       expect(data).not.toHaveProperty('responseBody');
     });
@@ -108,7 +119,7 @@ describe('EventsService', () => {
         body: { id: 'evt-1', status: 'received' },
       });
 
-      const result = await service.createEvent(input());
+      const result = await service.createEvent(ORG, input());
 
       expect(result).toEqual({ httpStatus: 201, body: { id: 'evt-1', status: 'received' } });
       expect(tx.payrollEvent.create).not.toHaveBeenCalled();
@@ -121,10 +132,35 @@ describe('EventsService', () => {
       tx.$executeRaw.mockResolvedValue(1);
       tx.$queryRaw.mockResolvedValueOnce([{ max: 4n }]);
 
-      await service.createEvent(input());
+      await service.createEvent(ORG, input());
 
       const data = tx.payrollEvent.create.mock.calls[0][0].data;
       expect(data.sequence).toBe(5n);
+    });
+
+    it('serializes on a tenant-qualified advisory lock key', async () => {
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+
+      await service.createEvent(ORG, input());
+
+      // The lock key carries the organization: two organizations using the same
+      // employee number must not serialize against each other.
+      expect(tx.$executeRaw.mock.calls[0][1]).toBe(`${ORG}:emp-1`);
+    });
+
+    it('scopes the MAX(sequence) probe to the organization', async () => {
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+
+      await service.createEvent(ORG, input());
+
+      // Raw query: (strings, organizationId, employeeId) — both bound parameters
+      // must be present so one organization's sequence space stays its own.
+      const [, ...bound] = tx.$queryRaw.mock.calls[0];
+      expect(bound).toEqual([ORG, 'emp-1']);
     });
   });
 
@@ -139,15 +175,16 @@ describe('EventsService', () => {
     it('marks the row queued then enqueues after a successful insert', async () => {
       persistedNewEvent();
 
-      const result = await service.createEvent(input());
+      const result = await service.createEvent(ORG, input());
 
       expect(result).toEqual({ httpStatus: 201, body: { id: expect.any(String), status: 'received' } });
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
-        where: { id: result.body.id, status: 'RECEIVED' },
+        where: { id: result.body.id, organizationId: ORG, status: 'RECEIVED' },
         data: { status: 'QUEUED' },
       });
       expect(eventQueue.enqueue).toHaveBeenCalledWith({
         eventId: result.body.id,
+        organizationId: ORG,
         eventType: EventType.BANK_ACCOUNT_CHANGE,
         employeeId: 'emp-1',
         sequence: 1, // JSON-safe Number(bigint)
@@ -158,13 +195,13 @@ describe('EventsService', () => {
       persistedNewEvent();
       eventQueue.enqueue.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:6379'));
 
-      const result = await service.createEvent(input());
+      const result = await service.createEvent(ORG, input());
 
       expect(result.httpStatus).toBe(201);
       expect(result.body).toEqual({ id: expect.any(String), status: 'received' });
       expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1); // row persisted
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
-        where: { id: result.body.id, status: 'RECEIVED' },
+        where: { id: result.body.id, organizationId: ORG, status: 'RECEIVED' },
         data: { status: 'QUEUED' },
       });
     });
@@ -175,7 +212,7 @@ describe('EventsService', () => {
         body: { id: 'evt-1', status: 'received' },
       });
 
-      await service.createEvent(input());
+      await service.createEvent(ORG, input());
 
       expect(eventQueue.enqueue).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
@@ -189,7 +226,7 @@ describe('EventsService', () => {
         body: { id: 'evt-2', status: 'received' },
       });
 
-      const result = await service.createEvent(input());
+      const result = await service.createEvent(ORG, input());
 
       expect(result.body).toEqual({ id: 'evt-2', status: 'received' });
       expect(eventQueue.enqueue).not.toHaveBeenCalled();
@@ -197,10 +234,11 @@ describe('EventsService', () => {
     });
   });
 
-  describe('getEventStatus (read-only, event-status-api)', () => {
+  describe('getEventStatus (read-only, tenant-scoped)', () => {
     // Faithful committed SUCCESS row as Prisma would return it.
     const row = {
       id: 'evt-1',
+      organizationId: ORG,
       eventType: 'BANK_ACCOUNT_CHANGE',
       employeeId: 'emp-1',
       payload: { employeeId: 'emp-1', effectiveDate: '2026-09-01', iban: 'DE89370400440532013000' },
@@ -214,15 +252,31 @@ describe('EventsService', () => {
     };
 
     it('throws NotFoundException for an unknown id and does not query attempts', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue(null);
+      prisma.payrollEvent.findFirst.mockResolvedValue(null);
 
-      await expect(service.getEventStatus('missing')).rejects.toBeInstanceOf(NotFoundException);
-      expect(prisma.payrollEvent.findUnique).toHaveBeenCalledWith({ where: { id: 'missing' } });
+      await expect(service.getEventStatus(ORG, 'missing')).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.payrollEvent.findFirst).toHaveBeenCalledWith({
+        where: { id: 'missing', organizationId: ORG },
+      });
+      expect(prisma.eventAttempt.findMany).not.toHaveBeenCalled();
+    });
+
+    it('reports another organization’s event as not found and reads no attempts', async () => {
+      // The event exists — just not for this organization. The tenant-filtered
+      // lookup returns nothing, so the caller learns only that it is absent.
+      prisma.payrollEvent.findFirst.mockResolvedValue(null);
+
+      await expect(service.getEventStatus(OTHER_ORG, 'evt-1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.payrollEvent.findFirst).toHaveBeenCalledWith({
+        where: { id: 'evt-1', organizationId: OTHER_ORG },
+      });
       expect(prisma.eventAttempt.findMany).not.toHaveBeenCalled();
     });
 
     it('maps the row (BigInt→number, dates→ISO, null passthrough) and orders attempts ascending', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue({
+      prisma.payrollEvent.findFirst.mockResolvedValue({
         ...row,
         processedAt: null,
         result: null,
@@ -251,7 +305,7 @@ describe('EventsService', () => {
         },
       ]);
 
-      const result = await service.getEventStatus('evt-1');
+      const result = await service.getEventStatus(ORG, 'evt-1');
 
       expect(prisma.eventAttempt.findMany).toHaveBeenCalledWith({
         where: { eventId: 'evt-1' },
@@ -292,10 +346,10 @@ describe('EventsService', () => {
     });
 
     it('produces a strictly JSON-serializable object (no BigInt, no raw Date)', async () => {
-      prisma.payrollEvent.findUnique.mockResolvedValue(row);
+      prisma.payrollEvent.findFirst.mockResolvedValue(row);
       prisma.eventAttempt.findMany.mockResolvedValue([]);
 
-      const result = await service.getEventStatus('evt-1');
+      const result = await service.getEventStatus(ORG, 'evt-1');
       const roundTripped = JSON.parse(JSON.stringify(result));
 
       expect(roundTripped).toEqual({

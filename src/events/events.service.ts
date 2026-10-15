@@ -32,14 +32,20 @@ interface FreshSubmission {
 }
 
 /**
- * Submits payroll events with exactly-once semantics:
+ * Submits payroll events with exactly-once semantics, scoped to ONE organization.
+ *
+ * The tenant boundary is the first argument of every public method, so no call site
+ * can read or write payroll data without naming the organization it belongs to.
+ * The organization comes from the verified access token (see `JwtAuthGuard`); it is
+ * never accepted from the request body.
  *
  *   1. validate payload per eventType (400 on failure)
  *   2. delegate dedupe + transactional insert to the shared idempotency layer
  *      (`IdempotencyService.execute` under scope `event-submission`): a keyed
  *      replay serves the stored response with no side effects; a miss runs the
  *      insert inside the layer's transaction alongside the idempotency record;
- *      a UNIQUE(scope, key) race is returned as the winner's stored response
+ *      a UNIQUE(organization, scope, key) race is returned as the winner's stored
+ *      response
  *   3. post-commit (fresh submissions only): mark the row `received → queued`,
  *      then best-effort enqueue (never blocks or fails the 201; the worker's
  *      relay recovers failures)
@@ -58,14 +64,18 @@ export class EventsService {
     private readonly idempotency: IdempotencyService,
   ) {}
 
-  async createEvent(input: CreateEventInput): Promise<SubmissionResult> {
+  async createEvent(
+    organizationId: string,
+    input: CreateEventInput,
+  ): Promise<SubmissionResult> {
     await this.payloadValidator.validate(input.eventType, input.payload);
 
     // Every supported payload type requires employeeId; payload is validated above.
     const employeeId = input.payload.employeeId as string;
 
     this.logger.debug(
-      `Submitting ${input.eventType} for employee ${employeeId} (key ${input.idempotencyKey})`,
+      `Submitting ${input.eventType} for employee ${employeeId} in organization ` +
+        `${organizationId} (key ${input.idempotencyKey})`,
     );
 
     // The layer dedupes under scope 'event-submission' and persists the stored
@@ -73,21 +83,23 @@ export class EventsService {
     // or race returns only { status, body } — no eventId — so the enqueue path
     // below is skipped for those.
     const submitted = await this.idempotency.execute(
+      organizationId,
       IDEMPOTENCY_SCOPE_EVENT_SUBMISSION,
       input.idempotencyKey,
-      (tx) => this.insertEvent(tx, input, employeeId),
+      (tx) => this.insertEvent(tx, input, employeeId, organizationId),
     );
 
     if (submitted.eventId) {
       this.logger.log(
-        `Event ${submitted.eventId} persisted (${input.eventType}, employee ${employeeId})`,
+        `Event ${submitted.eventId} persisted (${input.eventType}, employee ${employeeId}, organization ${organizationId})`,
       );
 
       // Background the queue so the 201 never depends on Redis state. The row is
       // marked `queued` first (always recoverable), then enqueued best-effort.
-      await this.markQueued(submitted.eventId, employeeId);
+      await this.markQueued(organizationId, submitted.eventId, employeeId);
       await this.enqueueBestEffort({
         id: submitted.eventId,
+        organizationId,
         eventType: input.eventType,
         employeeId,
         sequence: submitted.sequence,
@@ -98,15 +110,25 @@ export class EventsService {
   }
 
   /**
-   * Read-only status query (event-status-api, design D2/D4). Two sequential
-   * reads over existing tables: `payroll_events` by PK, then the append-only
-   * `event_attempts` audit trail (sorted by attempt number at the boundary).
+   * Read-only status query (event-status-api, design D2/D4), scoped to the caller's
+   * organization. Two sequential reads over existing tables: `payroll_events` by
+   * (organization, id), then the append-only `event_attempts` audit trail (sorted by
+   * attempt number at the boundary).
    *
-   * Never mutates anything. Unknown id → NotFoundException (shaped into the
-   * documented 404 `ErrorResponseDto` by the global filter).
+   * Never mutates anything. An event belonging to ANOTHER organization is reported
+   * as 404, not 403: the caller learns nothing about whether the id exists
+   * elsewhere. Unknown id → NotFoundException (shaped into the documented 404
+   * `ErrorResponseDto` by the global filter).
    */
-  async getEventStatus(id: string): Promise<EventStatusResponseDto> {
-    const row = await this.prisma.payrollEvent.findUnique({ where: { id } });
+  async getEventStatus(
+    organizationId: string,
+    id: string,
+  ): Promise<EventStatusResponseDto> {
+    // findFirst rather than findUnique: the lookup key is (organization_id, id),
+    // and the organization is not the primary key.
+    const row = await this.prisma.payrollEvent.findFirst({
+      where: { id, organizationId },
+    });
     if (!row) {
       throw new NotFoundException(`Event with id ${id} not found`);
     }
@@ -153,23 +175,32 @@ export class EventsService {
     tx: Prisma.TransactionClient,
     input: CreateEventInput,
     employeeId: string,
+    organizationId: string,
   ): Promise<FreshSubmission> {
     const id = randomUUID();
 
-    // Serialize inserts for one employee so MAX(sequence)+1 is race-free (R6).
-    // $executeRaw (not $queryRaw): pg_advisory_xact_lock returns Postgres `void`,
-    // which Prisma's queryRaw result deserializer cannot map.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employeeId}))`;
+    // The advisory-lock key is TENANT-QUALIFIED. Employee numbers are chosen by the
+    // customer, so two organizations may legitimately use the same one; keying the
+    // lock on the bare employee id would make unrelated tenants serialize on each
+    // other's submissions.
+    const sequenceLockKey = `${organizationId}:${employeeId}`;
+
+    // Serialize inserts for one employee WITHIN one organization so MAX(sequence)+1
+    // is race-free (R6). $executeRaw (not $queryRaw): pg_advisory_xact_lock returns
+    // Postgres `void`, which Prisma's queryRaw result deserializer cannot map.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${sequenceLockKey}))`;
 
     const rows = await tx.$queryRaw<Array<{ max: bigint | null }>>`
       SELECT COALESCE(MAX(sequence), 0) AS max
       FROM "payroll_events"
-      WHERE employee_id = ${employeeId}`;
+      WHERE organization_id = ${organizationId}
+        AND employee_id = ${employeeId}`;
     const next = (rows[0]?.max ?? 0n) + 1n;
 
     await tx.payrollEvent.create({
       data: {
         id,
+        organizationId,
         eventType: input.eventType,
         employeeId,
         payload: input.payload as Prisma.InputJsonValue,
@@ -192,10 +223,14 @@ export class EventsService {
    * already queued it). Failures are logged and never propagated: a submission
    * that cannot be marked queued still returns 201 and is recovered later.
    */
-  private async markQueued(id: string, employeeId: string): Promise<void> {
+  private async markQueued(
+    organizationId: string,
+    id: string,
+    employeeId: string,
+  ): Promise<void> {
     try {
       const { count } = await this.prisma.payrollEvent.updateMany({
-        where: { id, status: EventStatus.RECEIVED },
+        where: { id, organizationId, status: EventStatus.RECEIVED },
         data: { status: EventStatus.QUEUED },
       });
       if (count === 0) {
@@ -218,6 +253,7 @@ export class EventsService {
    */
   private async enqueueBestEffort(input: {
     id: string;
+    organizationId: string;
     eventType: EventType;
     employeeId: string;
     sequence: bigint;
@@ -226,6 +262,7 @@ export class EventsService {
       await Promise.race([
         this.eventQueue.enqueue({
           eventId: input.id,
+          organizationId: input.organizationId,
           eventType: input.eventType,
           employeeId: input.employeeId,
           sequence: Number(input.sequence),
@@ -234,7 +271,7 @@ export class EventsService {
       ]);
     } catch (error) {
       this.logger.error(
-        `Enqueue failed for event ${input.id} (${input.eventType}, employee ${input.employeeId}, seq ${input.sequence}): ${this.errorMessage(error)}`,
+        `Enqueue failed for event ${input.id} (${input.eventType}, employee ${input.employeeId}, organization ${input.organizationId}, seq ${input.sequence}): ${this.errorMessage(error)}`,
       );
     }
   }

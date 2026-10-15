@@ -8,10 +8,15 @@ import { WorkerModule } from '../apps/worker/src/worker.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { setupSwagger } from '../src/common/swagger/setup-swagger';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { registerTenant, TestTenant } from './support/auth';
 
 /**
  * E2E for the read-only status surface of GET /events/:id (event-status-api) —
  * REAL Postgres + REAL Redis required (`docker compose up`).
+ *
+ * Both payroll routes are tenant-scoped, so every boot that submits or reads an
+ * event registers a real organization through the HTTP surface and attaches its
+ * token to the request — the same path a client takes.
  *
  * Three boot environments in ONE file (jest runs describes in order, and
  * `test/jest-e2e.json` pins `maxWorkers: 1` so the shared Postgres is never
@@ -68,6 +73,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   let app: INestApplication;
   let workerApp: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
 
   beforeAll(async () => {
     process.env.PAYROLL_FAILURE_MODE = 'always-transient';
@@ -87,6 +93,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'event-status-transient');
 
     const workerModuleRef: TestingModule = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -111,12 +118,15 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
 
   const http = () => request(app.getHttpServer());
   const key = () => randomUUID();
+  // GET /events/:id requires the tenant's bearer token — every status read and
+  // submission below carries it.
   const getStatus = (id: string) =>
-    http().get(`/events/${id}`).expect(200) as Promise<request.Response>;
+    http().get(`/events/${id}`).set(tenant.headers).expect(200) as Promise<request.Response>;
 
   const submitSalary = async (employeeId: string) =>
     http()
       .post('/events')
+      .set(tenant.headers)
       .set('Idempotency-Key', key())
       .send({ eventType: 'SALARY_CHANGE', payload: SALARY_PAYLOAD(employeeId) })
       .expect(201);
@@ -250,7 +260,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   it('returns the structured 404 for an unknown id (no mutation)', async () => {
     const id = key();
 
-    const res = await http().get(`/events/${id}`).expect(404);
+    const res = await http().get(`/events/${id}`).set(tenant.headers).expect(404);
 
     expect(res.body).toMatchObject({
       statusCode: 404,
@@ -271,6 +281,7 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
   let app: INestApplication;
   let workerApp: INestApplication;
   let prisma: PrismaService;
+  let tenant: TestTenant;
 
   beforeAll(async () => {
     process.env.PAYROLL_FAILURE_MODE = 'always-success';
@@ -290,6 +301,7 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     prisma = app.get(PrismaService);
+    tenant = await registerTenant(app, 'event-status-success');
 
     const workerModuleRef: TestingModule = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -332,19 +344,24 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
     const id = (
       await http()
         .post('/events')
+        .set(tenant.headers)
         .set('Idempotency-Key', randomUUID())
         .send({ eventType: 'BANK_ACCOUNT_CHANGE', payload: BANK_PAYLOAD(employeeId) })
         .expect(201)
     ).body.id as string;
 
     const body = await waitFor(async () => {
-      const res = await http().get(`/events/${id}`);
+      const res = await http().get(`/events/${id}`).set(tenant.headers);
       if (res.status !== 200) return null;
       const body = res.body as StatusBody;
       return body.status === 'success' ? body : null;
     });
 
-    const row = await prisma.payrollEvent.findUnique({ where: { id } });
+    // Scoped to the submitting tenant: the committed row this assertion reads
+    // can only be the one its own submission created.
+    const row = await prisma.payrollEvent.findFirst({
+      where: { id, organizationId: tenant.organizationId },
+    });
     expect(row).not.toBeNull();
 
     expect(body.status).toBe('success');
