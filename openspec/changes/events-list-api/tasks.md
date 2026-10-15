@@ -34,7 +34,7 @@
 
 ## 6. Verification gate
 
-- [ ] 6.1 `pnpm turbo run lint typecheck test build` green from the root; unit (187+N), e2e (66+M), frontend (78+K) counts recorded
+- [x] 6.1 `pnpm turbo run lint typecheck test build` green from the root; unit (187+N), e2e (66+M), frontend (78+K) counts recorded — verified on the merged main commit (8d59975) in an isolated worktree: 19/19 turbo tasks green; counts: unit 208/20 suites (187+21), e2e 78/11 suites (66+12), frontend 84/13 files (78+6)
 - [x] 6.2 Turbo cache sanity: second run cached; editing the events service re-runs only what consumes it
 - [x] 6.3 Boundary check: the new query takes the organization as a required parameter (a schema-level requirement) and the route scrapes it from the token, not the request
 - [x] 6.4 Re-run the EXPLAIN capture post-merge so the index decision is documented with its before/after plans
