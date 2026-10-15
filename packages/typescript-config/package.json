@@ -1,0 +1,1 @@
+{"name": "@repo/typescript-config", "version": "0.0.0", "private": true, "description": "Shared compiler presets: base, a Nest-flavoured preset for the backend packages, and a React-flavoured preset for apps/web (design D8). Presets reproduce the options each package uses today; only the options differ per consumer, never a tool version.", "files": ["*.json"]}
