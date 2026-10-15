@@ -1,0 +1,1 @@
+{"$schema": "https://turborepo.com/schema.json", "ui": "tui", "globalEnv": ["NODE_ENV", "LOG_LEVEL"], "tasks": {"build": {"dependsOn": ["^build"], "outputs": ["dist/**"]}, "typecheck": {"dependsOn": ["^build"]}, "lint": {}, "test": {"dependsOn": ["^build"]}, "test:e2e": {"dependsOn": ["^build"], "cache": false}, "dev": {"cache": false, "persistent": true}}}

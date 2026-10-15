@@ -2,23 +2,21 @@
   "name": "payroll-event-processing",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "dev": "nest start --watch",
-    "dev:worker": "nest start worker --watch",
-    "build": "nest build",
-    "build:worker": "nest build worker",
-    "start": "node dist/src/main",
-    "start:worker": "node dist/apps/worker/src/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
-    "format": "prettier --write \"**/*.ts\"",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "dev:frontend": "npm --prefix frontend run dev",
-    "build:frontend": "npm --prefix frontend run build",
-    "test:frontend": "npm --prefix frontend run test"
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "dev:api": "turbo run dev --filter @repo/api",
+    "dev:worker": "turbo run dev --filter @repo/worker",
+    "dev:web": "turbo run dev --filter @repo/web",
+    "lint": "turbo run lint",
+    "lint:check": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.5",
@@ -59,6 +57,7 @@
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
+    "turbo": "^2.11.8",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.67.0"
   },

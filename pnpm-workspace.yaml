@@ -1,0 +1,22 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 12 runs dependency install scripts only for explicitly allowed packages
+# (the allowBuilds map; strictDepBuilds defaults to ON, so an unreviewed script
+# is a hard install error). Prisma's client generation and Vite's native
+# toolchain need their scripts — without these the failure looks like a version
+# problem rather than a policy decision (design D12). pnpm 12 renamed the old
+# `onlyBuiltDependencies` list to this map. @scarf/scarf is redis's telemetry
+# postinstall and msgpackr-extract bullmq's optional native accelerator — both
+# explicitly denied (msgpackr has a pure-JS fallback; behaviour is unchanged).
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  "@swc/core": true
+  "@tailwindcss/oxide": true
+  "esbuild": true
+  "prisma": true
+  "unrs-resolver": true
+  "@scarf/scarf": false
+  "msgpackr-extract": false
