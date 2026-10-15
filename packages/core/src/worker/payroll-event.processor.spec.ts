@@ -1,12 +1,12 @@
 import { PayrollEventProcessor } from './payroll-event.processor';
 import { PrismaService } from '@repo/database';
-import { PayrollEventQueueService } from '../../../src/queue/payroll-event-queue.service';
+import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { PAYROLL_EVENT_JOB } from '@repo/database';
 import { EventStatus } from '@prisma/client';
-import { EventType } from '../../../src/events/event-type';
-import { EventClaim } from '../../../src/processing/event-claim';
-import { HeartbeatService } from '../../../src/processing/heartbeat.service';
-import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
+import { EventType } from '../events/event-type';
+import { EventClaim } from '../processing/event-claim';
+import { HeartbeatService } from '../processing/heartbeat.service';
+import { TransientPayrollFailureError } from '../processing/errors/payroll-processing.error';
 import { ConfigService } from '@nestjs/config';
 
 const ORG = 'org-a';

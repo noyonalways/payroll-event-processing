@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WorkerModule } from './worker.module';
-import { logLevelsFor } from '../../../src/common/logger/log-levels';
+import { logLevelsFor } from '@repo/core';
 
 async function bootstrap() {
   const logger = new Logger('WorkerBootstrap');

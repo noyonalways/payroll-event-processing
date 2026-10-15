@@ -3,8 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule } from '@repo/database';
 import { QueueModule } from '@repo/database';
-import { ProcessingModule } from '../../../src/processing/processing.module';
-import { HeartbeatService } from '../../../src/processing/heartbeat.service';
+import { ProcessingModule } from '../processing/processing.module';
+import { HeartbeatService } from '../processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
 
 @Module({

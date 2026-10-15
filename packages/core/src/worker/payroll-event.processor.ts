@@ -7,15 +7,15 @@ import { PrismaService } from '@repo/database';
 import {
   PayrollEventQueueService,
   PayrollEventJobInput,
-} from '../../../src/queue/payroll-event-queue.service';
+} from '../queue/payroll-event-queue.service';
 import {
   PAYROLL_EVENTS_QUEUE,
   PAYROLL_EVENT_JOB,
 } from '@repo/database';
 import { WORKER_OPTIONS } from '@repo/database';
-import { EventClaim } from '../../../src/processing/event-claim';
-import { HeartbeatService } from '../../../src/processing/heartbeat.service';
-import { TransientPayrollFailureError } from '../../../src/processing/errors/payroll-processing.error';
+import { EventClaim } from '../processing/event-claim';
+import { HeartbeatService } from '../processing/heartbeat.service';
+import { TransientPayrollFailureError } from '../processing/errors/payroll-processing.error';
 
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
