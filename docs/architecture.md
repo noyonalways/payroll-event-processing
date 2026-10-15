@@ -1,7 +1,7 @@
 # Payroll Event Processing — Architecture & Reliability
 
-> **Status:** Implemented — all roadmap changes 2–12 are shipped and the CI pipeline
-> (backend lint/unit/build, frontend lint/vitest/build, full e2e against real
+> **Status:** Implemented — all roadmap changes 2–13 are shipped and the CI pipeline
+> (backend lint/typecheck/unit/build, frontend lint/vitest/build, full e2e against real
 > Postgres + Redis service containers) is green on `main`.
 >
 > - Change 7 (`concurrency-and-crash-recovery`) ✅ — transactional row-locked
@@ -10,7 +10,8 @@
 > - Change 8 (`event-status-api`) ✅ — read-only `GET /events/:id` status + terminal
 >   attempt trail (404 `ErrorResponseDto` on an unknown id).
 > - Change 9 (`minimal-frontend`) ✅ — React/Vite demo UI with the `EMP-DEMO-*`
->   scenario lever (see `src/processing/demo-scenarios.ts`).
+>   scenario lever (the mapping lives in `@repo/shared`,
+>   `packages/shared/src/demo-scenarios.ts`).
 > - Change 10 (`test-suite`) ✅ — test suites gated in CI (111 backend unit tests,
 >   40 e2e, 52 frontend when shipped; the suite is now 187 / 66 / 78).
 > - Change 11 (`ci-and-docs`) ✅ — `.github/workflows/ci.yml`, README, this document.
@@ -18,8 +19,18 @@
 >   `refresh_tokens`, an organization-scoped data path with tenant-qualified unique keys,
 >   `POST /auth/*` + `GET /auth/me` behind a deny-by-default guard, tenant-qualified queue
 >   job ids, and a migration with a conditional legacy-tenant backfill (§5 R8, §10 D6–D11).
+> - Change 13 (`turborepo-workspace`) ✅ — the repository is now a pnpm + Turborepo
+>   workspace: three deployable apps (`apps/api`, `apps/worker`, `apps/web`) and five
+>   packages (`@repo/core`, `@repo/database`, `@repo/shared`, plus the eslint- and
+>   typescript-config presets). Boundaries are enforced by the package manager
+>   (`packages/core` holds both composition roots, so the e2e suites boot API + worker
+>   from one package; `apps/web` imports the shared event-type contract); per-app
+>   Dockerfiles build from the workspace root with app-filtered installs; CI runs turbo
+>   tasks per member. Runtime behaviour unchanged — the 187 unit + 66 e2e + 78 frontend
+>   tests are the same suites that gated the pre-move commit.
 >
-> **Scope:** Full-system architecture + visual flows (roadmap changes 2–12).
+> **Scope:** Full-system architecture + visual flows (roadmap changes 2–12; the workspace
+> conversion is recorded in `openspec/changes/turborepo-workspace`).
 > **Related:** The diagrams that illustrate this document (ERD, event flow, lifecycle
 > state machine, system architecture) are on **Eraser**:
 > <https://app.eraser.io/workspace/hIaUa8ZhdcDwT5YtdUiI>.
@@ -93,16 +104,20 @@ See the **System Architecture** diagram in eraser.io. In prose:
                  └─────────────────────────────┘
 ```
 
-**Key components & responsibilities:**
+**Key components & responsibilities** — paths reflect the workspace layout (change 13):
+the business logic lives in `@repo/core`, the outbound clients in `@repo/database`, and the
+shared vocabulary in `@repo/shared`; `apps/api` and `apps/worker` are thin entrypoints around
+their composition roots (design D4).
 
 | Component | Responsibility | Reliability role |
 |---|---|---|
-| **NestJS API** | Deny-by-default `JwtAuthGuard`; DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue | Idempotency, fast response, tenant boundary |
-| **Auth & tenancy** (`src/auth/`) | Registration/login/refresh/logout, scrypt password hashing, `TokenService` (signed access JWT + hashed refresh rows), the guard that resolves `{ userId, organizationId, role }` from the token | Identity, tenancy boundary |
-| **Redis / BullMQ** | Job queue keyed per employee **within an organization** (tenant-qualified `jobId` → FIFO), delayed jobs for backoff, stalled-job detection | Ordering, retries, crash recovery |
-| **Worker** | Claim job, side-effect marker (`processing`), row lock, handler dispatch, provider call, transactional commit — all scoped by the job's organization | Exactly-once, concurrency, recovery, tenant isolation |
-| **PostgreSQL / Prisma** | `payroll_events` + `event_attempts` + `worker_heartbeats` + tenancy/identity tables, unique constraints, status transition guard, `SELECT … FOR UPDATE` (plain) row lock inside an interactive `$transaction` | Ground truth, atomicity, dedup, tenant ownership |
-| **Simulated provider** | Random temp/perm failure (`PAYROLL_TEMPORARY_FAILURE_RATE`, `PAYROLL_PERMANENT_FAILURE_RATE`) | Testability of failure paths |
+| **HTTP API app** (`apps/api/`) | Entrypoint around the composition root in `@repo/core`: deny-by-default `JwtAuthGuard`; DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue | Idempotency, fast response, tenant boundary |
+| **Auth & tenancy** (`packages/core/src/auth/`) | Registration/login/refresh/logout, scrypt password hashing, `TokenService` (signed access JWT + hashed refresh rows), the guard that resolves `{ userId, organizationId, role }` from the token | Identity, tenancy boundary |
+| **Redis / BullMQ** (connection in `@repo/database`, producer + FIFO semantics in `@repo/core`) | Job queue keyed per employee **within an organization** (tenant-qualified `jobId` → FIFO), delayed jobs for backoff, stalled-job detection | Ordering, retries, crash recovery |
+| **Worker app** (`apps/worker/`) | Consumer entrypoint around the worker composition root in `@repo/core`: claim job, side-effect marker (`processing`), row lock, handler dispatch, provider call, transactional commit — all scoped by the job's organization | Exactly-once, concurrency, recovery, tenant isolation |
+| **PostgreSQL / Prisma** (`packages/database/`) | `payroll_events` + `event_attempts` + `worker_heartbeats` + tenancy/identity tables, unique constraints, status transition guard, `SELECT … FOR UPDATE` (plain) row lock inside an interactive `$transaction` | Ground truth, atomicity, dedup, tenant ownership |
+| **Simulated provider** (`packages/core/src/processing/`) | Random temp/perm failure (`PAYROLL_TEMPORARY_FAILURE_RATE`, `PAYROLL_PERMANENT_FAILURE_RATE`) | Testability of failure paths |
+| **Demo UI** (`apps/web/`) | React/Vite two-pane app against the same API; imports the event-type contract and error-body shape from `@repo/shared` — a browser bundle with no database or queue client in it | Reviewer/demo surface |
 
 ## 4. Event lifecycle
 
@@ -144,7 +159,7 @@ Each requirement mapped to its enforcement point.
 
 ### R2 — Idempotency (no duplicate business effects)
 - Client sends a required `Idempotency-Key` header.
-- A shared NestJS idempotency layer (`src/common/idempotency`, `idempotency_records` table) dedupes under `(organization, scope, key)`; the **`UNIQUE (organization_id, scope, key)`** constraint on the table is the DB's final arbiter. The organization is part of the identity because the key is client-chosen: a global key space would let two tenants pick the same value and the second would be served the first tenant's stored response body (§10 D7).
+- A shared NestJS idempotency layer (`packages/core/src/common/idempotency`, `idempotency_records` table) dedupes under `(organization, scope, key)`; the **`UNIQUE (organization_id, scope, key)`** constraint on the table is the DB's final arbiter. The organization is part of the identity because the key is client-chosen: a global key space would let two tenants pick the same value and the second would be served the first tenant's stored response body (§10 D7).
 - On a miss, the submit operation and the record insert (`responseStatus`/`responseBody`/`expiresAt`) commit in the **same transaction**; duplicate submits replay the stored response with no new side effects. A rare race on the unique index is caught as a `P2002` constraint violation and treated as the same duplicate path (post-transaction winner read).
 - Records are TTL'd (`IDEMPOTENCY_TTL_SECONDS`, default 86400 s) and swept (`IDEMPOTENCY_SWEEP_INTERVAL_MS`, default 60 s); an expired key is treated as absent — the expired row is deleted inside the transaction before the new insert.
 - `payroll_events.idempotency_key` stays `NOT NULL` (non-unique) purely for traceability.
@@ -175,7 +190,7 @@ Each requirement mapped to its enforcement point.
 ### R7 — Extensibility
 - Handler strategy registry: `Map<EventType, PayrollHandler>`; a new event type = new DTO + new handler registered, no controller/service change.
 - DTOs are per-type with their own required fields (see README table).
-- **Enforced in:** `src/processing/handlers` registry.
+- **Enforced in:** `packages/core/src/processing/handlers` registry.
 
 ### R8 — Tenant isolation (multi-tenant foundation, change 12)
 - **One owner per row, taken only from the token.** Every tenant-owned table carries a required `organization_id` (FK, `NOT NULL`, no default), and the organization always comes from the verified access token's `org` claim — `@CurrentActor()` in the controller, then a required first argument of the service (`EventsService.createEvent(organizationId, …)`, `EventClaimInput.organizationId`, `IdempotencyService.execute(organizationId, …)`). A request body field, query parameter, or header cannot steer it (§10 D6).
@@ -183,7 +198,7 @@ Each requirement mapped to its enforcement point.
 - **Every data-path statement is tenant-scoped.** The transactional claim (`SELECT … FOR UPDATE`, the guarded `queued → processing` update, the payload read, the terminal writes) filters by `(id, organization_id)`; the job data carries `organizationId`, so a forged job naming a valid foreign event id claims and mutates nothing. The relay's "next pending event for this employee" lookup is scoped to the job's organization, and the per-employee advisory lock is keyed on `${organizationId}:${employeeId}` — two tenants using the same employee number never serialize on each other.
 - **Tenant-qualified queue job ids.** `perEmployeeJobId(organizationId, employeeId)` joins percent-encoded parts with `|` (e.g. `org-1|emp-1`). It must be tenant-qualified — employee numbers are tenant-local, and a bare `employeeId` would make two tenants share one BullMQ slot, letting one tenant's backlog suppress another's events — and it must avoid `:` because **BullMQ rejects a custom id containing a colon unless it splits into exactly three segments** (a legacy repeatable-job compatibility check). An earlier `<organizationId>:<employeeId>` form threw on every enqueue; the producer treats enqueue failure as non-fatal by design (the row is the source of truth), so the error was swallowed and events sat in `queued`. Percent-encoding both parts makes the mapping injective (§10 D10).
 - **Cross-organization access reads as absence.** A foreign event id returns `404` with the same body as an unknown id, and the tenant-qualified idempotency key means a client-chosen key can never replay another tenant's stored response body.
-- **Enforced in:** `src/auth/` (guard, token/password services, `@CurrentActor`/`@Public`), the required `organizationId` arguments on `EventsService` / `IdempotencyService` / `EventClaim`, `perEmployeeJobId`, and the tenant-qualified unique keys/indexes; asserted end-to-end by `test/tenant-isolation.e2e-spec.ts` (two organizations over real HTTP).
+- **Enforced in:** `packages/core/src/auth/` (guard, token/password services, `@CurrentActor`/`@Public`), the required `organizationId` arguments on `EventsService` / `IdempotencyService` / `EventClaim`, `perEmployeeJobId`, and the tenant-qualified unique keys/indexes; asserted end-to-end by `apps/api/test/tenant-isolation.e2e-spec.ts` (two organizations over real HTTP).
 
 ## 6. Data model
 
@@ -363,7 +378,7 @@ a bearer token.
 | Consumed refresh token replayed | `401`; every live refresh token for that user revoked | the legitimate client signs in again; the copied token is dead |
 | Access token outlives a removed membership | usable until expiry (≤ 15 m by default) | refresh re-reads the membership row and refuses; recorded limitation (§10) |
 | Invalid payload | — | `400` at submission, nothing persisted |
-| Demo scenario id (`EMP-DEMO-*`, see `src/processing/demo-scenarios.ts`) | forced outcome per submission: success, `failed`/`PERMANENT` (attempt 1), transient retries → `failed`/`TEMPORARY` (every attempt), transient-then-success (attempt 3), or transient-then-permanent (attempt 3, `FAILAFTER`) | deterministic override, wins over `PAYROLL_FAILURE_MODE`; reviewer lever for the demo UI — each attempt is recorded on the audit trail |
+| Demo scenario id (`EMP-DEMO-*`, see `packages/shared/src/demo-scenarios.ts`) | forced outcome per submission: success, `failed`/`PERMANENT` (attempt 1), transient retries → `failed`/`TEMPORARY` (every attempt), transient-then-success (attempt 3), or transient-then-permanent (attempt 3, `FAILAFTER`) | deterministic override, wins over `PAYROLL_FAILURE_MODE`; reviewer lever for the demo UI — each attempt is recorded on the audit trail |
 
 ## 9. Mapping to the roadmap
 
@@ -415,11 +430,11 @@ await prisma.$transaction(async (tx) => {
   // OR re-throw TransientPayrollFailureError to ABORT (claim rolls back).
 }, { timeout: 10_000, maxWait: 5_000 });
 ```
-**Why:** Prisma's query builder has no FOR UPDATE support (verified); the supported way is `$queryRaw` inside an interactive `$transaction`, which also exposes the guarded `UPDATE`. Plain `FOR UPDATE` (not `SKIP LOCKED`) is correct here because the second contender blocks, then its guarded claim matches 0 rows and it skips — every job still gets one definitive verdict. Isolated in `src/processing/event-claim.ts`; the transaction stays short (well under `lockDuration`), and a transient failure re-throw aborts it with **no explicit `processing → queued` reset** — the rollback IS the reset, so a crash at any point also leaves the row claimable (R4). (Since change 12, this lock, the guarded claim, and every other statement in the transaction are additionally scoped by `organization_id` — §5 R8 / §10 D6. The snippet above shows the pre-tenancy shape.)
+**Why:** Prisma's query builder has no FOR UPDATE support (verified); the supported way is `$queryRaw` inside an interactive `$transaction`, which also exposes the guarded `UPDATE`. Plain `FOR UPDATE` (not `SKIP LOCKED`) is correct here because the second contender blocks, then its guarded claim matches 0 rows and it skips — every job still gets one definitive verdict. Isolated in `packages/core/src/processing/event-claim.ts`; the transaction stays short (well under `lockDuration`), and a transient failure re-throw aborts it with **no explicit `processing → queued` reset** — the rollback IS the reset, so a crash at any point also leaves the row claimable (R4). (Since change 12, this lock, the guarded claim, and every other statement in the transaction are additionally scoped by `organization_id` — §5 R8 / §10 D6. The snippet above shows the pre-tenancy shape.)
 
 ### D6 — Shared schema with an `organization_id` discriminator (change 12, `multi-tenant-foundation`)
 One database, one migration history, an `organization_id` column on every tenant-owned table, and the organization as a **required argument** of every tenant-scoped method: `EventsService.createEvent(organizationId, …)`, `EventClaim.claimAndProcess({ organizationId, … })`, `IdempotencyService.execute(organizationId, …)`. The organization is read only from the verified access token's `org` claim — never from a body field, query parameter, or header — so a caller cannot widen their boundary by editing the request.
-**Alternatives:** *schema-per-tenant* / *database-per-tenant* (stronger isolation, but migration work multiplies by tenant count, pooling gets complicated, and the worker's cross-row relay plus the shared idempotency store would need reworking); a *Prisma client extension* injecting the filter automatically (cannot cover the raw `SELECT … FOR UPDATE` / `pg_advisory_xact_lock` statements, so the most safety-critical queries would stay manual — a partial guarantee is worse than an explicit one); `AsyncLocalStorage` (implicit, harder to test); **PostgreSQL RLS** (strongest, but needs a per-request `SET LOCAL` that conflicts with pooling unless every transaction sets it). Isolation is asserted by e2e tests that register a second organization (`test/tenant-isolation.e2e-spec.ts`); RLS remains the planned defence-in-depth follow-up, so the boundary is application-layer today.
+**Alternatives:** *schema-per-tenant* / *database-per-tenant* (stronger isolation, but migration work multiplies by tenant count, pooling gets complicated, and the worker's cross-row relay plus the shared idempotency store would need reworking); a *Prisma client extension* injecting the filter automatically (cannot cover the raw `SELECT … FOR UPDATE` / `pg_advisory_xact_lock` statements, so the most safety-critical queries would stay manual — a partial guarantee is worse than an explicit one); `AsyncLocalStorage` (implicit, harder to test); **PostgreSQL RLS** (strongest, but needs a per-request `SET LOCAL` that conflicts with pooling unless every transaction sets it). Isolation is asserted by e2e tests that register a second organization (`apps/api/test/tenant-isolation.e2e-spec.ts`); RLS remains the planned defence-in-depth follow-up, so the boundary is application-layer today.
 
 ### D7 — The organization is a component of the idempotency key
 `UNIQUE (scope, key)` became `UNIQUE (organization_id, scope, key)`, and `execute()` takes the organization as its first argument.
