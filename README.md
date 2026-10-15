@@ -162,8 +162,8 @@ Requires Docker + Docker Compose.
 # it is gitignored — create it from the template before the first run. The
 # template lives at the workspace root; the real stage files live with the API
 # app.
-cp .env.example apps/api/.env.development
-#   PowerShell: Copy-Item .env.example apps/api/.env.development
+cp apps/api/.env.example apps/api/.env.development
+#   PowerShell: Copy-Item apps/api/.env.example apps/api/.env.development
 
 docker compose up --build
 ```
@@ -298,9 +298,9 @@ pnpm --filter @repo/database exec prisma generate
 #    stages you plan to run. The template's AUTH_JWT_SECRET is a placeholder:
 #    replace it per stage with `openssl rand -base64 48` — the app refuses to
 #    boot when the value is missing or shorter than 32 characters.
-cp .env.example apps/api/.env.development
-cp .env.example apps/api/.env.test
-#   PowerShell: Copy-Item .env.example apps/api/.env.development
+cp apps/api/.env.example apps/api/.env.development
+cp apps/api/.env.example apps/api/.env.test
+#   PowerShell: Copy-Item apps/api/.env.example apps/api/.env.development
 
 # 4. The Prisma CLI reads packages/database/.env. Create it with a DATABASE_URL
 #    and keep it in sync with apps/api/.env.development (gitignored — see
@@ -331,11 +331,11 @@ launched from (workspace root, the app's own directory, or through turbo — the
 path, where `docker-compose.yml` provides them as real environment variables and overrides the
 two topology vars (`DATABASE_URL`, `REDIS_HOST`) with compose-network service names.
 
-**.env template:** `.env.example` at the workspace root — copy it to
+**.env template:** `apps/api/.env.example` — copy it to
 `apps/api/.env.development` / `apps/api/.env.test` and adjust.
 
-**The stage-file story:** the template (`.env.example`) is the only env file at the workspace
-root; the real stage files live with the API app (`apps/api/.env.<NODE_ENV>`) because that is
+**The stage-file story:** the template (`apps/api/.env.example`) lives beside the stage files it templates;
+the real stage files live with the API app (`apps/api/.env.<NODE_ENV>`) because that is
 the app a developer runs on the host, and both entrypoints read that one set. The **Prisma
 CLI** (`migrate`, `studio`) auto-loads a plain `.env` beside the schema — so
 `packages/database/.env` exists solely so Prisma commands work without exporting variables by

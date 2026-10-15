@@ -22,10 +22,10 @@ The system SHALL provide a `docker-compose.yml` such that `docker compose up --b
 - **THEN** the services SHALL reach each other over the compose network by service name, and the published host ports SHALL be unchanged from the pre-workspace topology
 
 ### Requirement: Environment variables are documented
-The repository SHALL contain a `.env.example` file at the workspace root listing every required and optional environment variable with a descriptive comment and a safe default value where applicable. The real stage files (`.env.<NODE_ENV>`) SHALL live with the API app (`apps/api/.env.<NODE_ENV>`), and the workspace root SHALL NOT carry stage environment files. Every backend entrypoint SHALL resolve `apps/api/.env.<NODE_ENV>` to an absolute path so the same file loads regardless of the directory the app is launched from, and SHALL refuse to start, naming that file, when it is absent and the required variables were not injected through the environment. The Prisma CLI SHALL read `packages/database/.env`.
+The repository SHALL contain an `apps/api/.env.example` file listing every required and optional environment variable with a descriptive comment and a safe default value where applicable. The real stage files (`.env.<NODE_ENV>`) SHALL live with the API app (`apps/api/.env.<NODE_ENV>`), and the workspace root SHALL NOT carry stage environment files. Every backend entrypoint SHALL resolve `apps/api/.env.<NODE_ENV>` to an absolute path so the same file loads regardless of the directory the app is launched from, and SHALL refuse to start, naming that file, when it is absent and the required variables were not injected through the environment. The Prisma CLI SHALL read `packages/database/.env`.
 
 #### Scenario: New developer setup
-- **WHEN** a developer copies `.env.example` to `apps/api/.env.development` without modification
+- **WHEN** a developer copies `apps/api/.env.example` to `apps/api/.env.development` without modification
 - **THEN** `docker compose up --build` SHALL start successfully in a default local configuration
 
 #### Scenario: An app reads the app-owned stage file from any invocation directory
