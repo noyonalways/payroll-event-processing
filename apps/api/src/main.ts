@@ -2,10 +2,14 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-import { logLevelsFor } from './common/logger/log-levels';
-import { setupSwagger } from './common/swagger/setup-swagger';
+// The HTTP composition root and its collaborators come from the business-logic
+// package (design D4): this file is the app's entrypoint, not business logic.
+import {
+  AppModule,
+  HttpExceptionFilter,
+  logLevelsFor,
+  setupSwagger,
+} from '@repo/core';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');

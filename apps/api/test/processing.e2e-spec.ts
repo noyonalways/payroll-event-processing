@@ -2,10 +2,8 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { randomUUID } from 'crypto';
-import { AppModule } from '../src/app.module';
-import { WorkerModule } from '../apps/worker/src/worker.module';
-import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule, HttpExceptionFilter, WorkerModule } from '@repo/core';
+import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
 
 /**

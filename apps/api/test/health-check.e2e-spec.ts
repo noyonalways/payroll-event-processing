@@ -1,10 +1,8 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
-import { setupSwagger } from '../src/common/swagger/setup-swagger';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule, HttpExceptionFilter, setupSwagger } from '@repo/core';
+import { PrismaService } from '@repo/database';
 
 /**
  * E2E for the worker-liveness surface of GET /health (design D4) — REAL

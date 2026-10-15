@@ -2,8 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { randomUUID } from 'crypto';
-import { AppModule } from '../src/app.module';
-import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
+import { AppModule, HttpExceptionFilter } from '@repo/core';
 import { registerTenant, TestTenant } from './support/auth';
 
 /**

@@ -2,8 +2,9 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { WorkerModule } from './worker.module';
-import { logLevelsFor } from '@repo/core';
+// The consumer composition root comes from the business-logic package (design
+// D4): this file is the worker's entrypoint, not business logic.
+import { WorkerModule, logLevelsFor } from '@repo/core';
 
 async function bootstrap() {
   const logger = new Logger('WorkerBootstrap');

@@ -2,45 +2,45 @@
 
 ## 1. Prerequisite — land the current work first
 
-- [ ] 1.1 Commit the multi-tenant work on `main` (94 files) and archive it with `openspec archive multi-tenant-foundation` — verify `openspec/specs/` now contains the `authentication` and `tenancy` capabilities and `openspec list` reports no other active change
-- [ ] 1.2 Create a dedicated branch for the restructure and verify it is not `main`, so the whole move is reversible by reverting one branch
+- [x] 1.1 Commit the multi-tenant work on `main` (94 files) and archive it with `openspec archive multi-tenant-foundation` — verify `openspec/specs/` now contains the `authentication` and `tenancy` capabilities and `openspec list` reports no other active change
+- [x] 1.2 Create a dedicated branch for the restructure and verify it is not `main`, so the whole move is reversible by reverting one branch
 
 ## 2. Workspace skeleton
 
-- [ ] 2.1 Add `pnpm-workspace.yaml` declaring `apps/*` and `packages/*`, and convert the root `package.json` to a private workspace root pinning `packageManager: pnpm@12.11.2` with `turbo@2.11.8` as its only new devDependency — verify `pnpm install` resolves every existing workspace member
-- [ ] 2.2 Add `.npmrc` allowlisting `pnpm.onlyBuiltDependencies` for the packages that need install scripts (Prisma client and engines, esbuild, the Tailwind oxide binary) — verify `pnpm install` runs those scripts and `pnpm --filter @repo/database exec prisma -v` reports a working CLI
-- [ ] 2.3 Add `turbo.json` declaring `build` (`dependsOn: ["^build"]`, with outputs), `lint`, `typecheck`, `test` (cached, with declared environment inputs), `test:e2e` and `dev` (`cache: false`, with `dev` persistent), plus `globalEnv` — verify `pnpm turbo run build --dry=json` reports the package/task graph and names the members it would run
-- [ ] 2.4 Add root scripts as thin `turbo run` wrappers (build, lint, typecheck, test, test:e2e, dev per app) — verify each root script dispatches to the graph rather than to a hard-coded path
-- [ ] 2.5 Regenerate the lockfile with pnpm and delete `package-lock.json`, keeping every version range unchanged — verify the diff touches only the lockfile and the root manifest and that no dependency range was widened
+- [x] 2.1 Add `pnpm-workspace.yaml` declaring `apps/*` and `packages/*`, and convert the root `package.json` to a private workspace root pinning `packageManager: pnpm@12.11.2` with `turbo@2.11.8` as its only new devDependency — verify `pnpm install` resolves every existing workspace member
+- [x] 2.2 Add `.npmrc` allowlisting `pnpm.onlyBuiltDependencies` for the packages that need install scripts (Prisma client and engines, esbuild, the Tailwind oxide binary) — verify `pnpm install` runs those scripts and `pnpm --filter @repo/database exec prisma -v` reports a working CLI
+- [x] 2.3 Add `turbo.json` declaring `build` (`dependsOn: ["^build"]`, with outputs), `lint`, `typecheck`, `test` (cached, with declared environment inputs), `test:e2e` and `dev` (`cache: false`, with `dev` persistent), plus `globalEnv` — verify `pnpm turbo run build --dry=json` reports the package/task graph and names the members it would run
+- [x] 2.4 Add root scripts as thin `turbo run` wrappers (build, lint, typecheck, test, test:e2e, dev per app) — verify each root script dispatches to the graph rather than to a hard-coded path
+- [x] 2.5 Regenerate the lockfile with pnpm and delete `package-lock.json`, keeping every version range unchanged — verify the diff touches only the lockfile and the root manifest and that no dependency range was widened
 
 ## 3. `@repo/database` — the outbound clients (do this first: riskiest tooling)
 
-- [ ] 3.1 `git mv prisma/ packages/database/prisma/` and confirm the move is recorded as a rename, so the schema and migration history keep their attribution
-- [ ] 3.2 Add `packages/database/package.json` (name, private, a `build` script compiling to `dist/` with declarations, `exports` pointing at `dist`, plus `generate`/`migrate` scripts, and dependencies on `@prisma/client` and `prisma`) — verify `pnpm --filter @repo/database exec prisma validate` passes against the moved schema
-- [ ] 3.3 Move `PrismaService` and the global `PrismaModule` into the package and export them — verify a Nest application importing the package can inject `PrismaService` without importing it explicitly, preserving the current global-module behaviour
-- [ ] 3.4 Move the Redis/BullMQ connection module (`queue.module.ts`, `worker-options.ts`) into the package and export it, leaving the producer and the FIFO/relay semantics in `core` — verify a producer written against the exported queue token still resolves
-- [ ] 3.5 Regenerate the Prisma client from the new location and run one real query against the scratch database — verify the client resolves and returns rows, proving generation works under pnpm's isolated `node_modules`
-- [ ] 3.6 Verify `prisma migrate deploy` applies the full history from the package's schema path against a fresh database, and is idempotent on a second run
+- [x] 3.1 `git mv prisma/ packages/database/prisma/` and confirm the move is recorded as a rename, so the schema and migration history keep their attribution
+- [x] 3.2 Add `packages/database/package.json` (name, private, a `build` script compiling to `dist/` with declarations, `exports` pointing at `dist`, plus `generate`/`migrate` scripts, and dependencies on `@prisma/client` and `prisma`) — verify `pnpm --filter @repo/database exec prisma validate` passes against the moved schema
+- [x] 3.3 Move `PrismaService` and the global `PrismaModule` into the package and export them — verify a Nest application importing the package can inject `PrismaService` without importing it explicitly, preserving the current global-module behaviour
+- [x] 3.4 Move the Redis/BullMQ connection module (`queue.module.ts`, `worker-options.ts`) into the package and export it, leaving the producer and the FIFO/relay semantics in `core` — verify a producer written against the exported queue token still resolves
+- [x] 3.5 Regenerate the Prisma client from the new location and run one real query against the scratch database — verify the client resolves and returns rows, proving generation works under pnpm's isolated `node_modules`
+- [x] 3.6 Verify `prisma migrate deploy` applies the full history from the package's schema path against a fresh database, and is idempotent on a second run
 
 ## 4. Shared configuration packages
 
-- [ ] 4.1 Add `packages/typescript-config` with a base preset plus a Nest-flavoured and a React-flavoured preset, each reproducing the compiler options the packages use today — verify a package extending each preset type-checks with the same options as before (no diff in `tsc --showConfig` behaviour)
-- [ ] 4.2 Add `packages/eslint-config` exporting the backend flat config — verify `api`, `worker`, `core`, `database`, and `shared` all lint through it and report the same results as the pre-move root config
-- [ ] 4.3 Verify `turbo run typecheck` and `turbo run lint` are now real per-package tasks rather than no-ops
+- [x] 4.1 Add `packages/typescript-config` with a base preset plus a Nest-flavoured and a React-flavoured preset, each reproducing the compiler options the packages use today — verify a package extending each preset type-checks with the same options as before (no diff in `tsc --showConfig` behaviour)
+- [x] 4.2 Add `packages/eslint-config` exporting the backend flat config — verify `api`, `worker`, `core`, `database`, and `shared` all lint through it and report the same results as the pre-move root config
+- [x] 4.3 Verify `turbo run typecheck` and `turbo run lint` are now real per-package tasks rather than no-ops
 
 ## 5. `@repo/core` — the business logic
 
-- [ ] 5.1 `git mv src/ packages/core/src/` — verify the move is recorded as renames and that intra-tree relative imports still resolve (run a package-local typecheck before touching any import)
-- [ ] 5.2 Add `packages/core/package.json` with its own dependencies (NestJS runtime, `bullmq`, `@nestjs/jwt`, `class-validator`, `joi`, and `@repo/database`) a `build` script compiling to `dist/` with declarations, and an `exports` map pointing at `dist` while exposing both composition roots and the shared surface (see design D6: source-only packages break `nest build`) — verify `pnpm --filter @repo/core exec tsc --noEmit` reports no unresolved module
-- [ ] 5.3 Rewrite only the imports that cross the new boundary (the composition roots' database/queue imports, and the worker's `../../../src/...` imports) — verify `grep -rn "\.\./\.\./\.\." apps packages` finds no relative import escaping its own package
-- [ ] 5.4 Run the 187 unit tests from inside the package — verify they pass unmodified apart from import paths, confirming the move changed no behaviour
+- [x] 5.1 `git mv src/ packages/core/src/` — verify the move is recorded as renames and that intra-tree relative imports still resolve (run a package-local typecheck before touching any import)
+- [x] 5.2 Add `packages/core/package.json` with its own dependencies (NestJS runtime, `bullmq`, `@nestjs/jwt`, `class-validator`, `joi`, and `@repo/database`) a `build` script compiling to `dist/` with declarations, and an `exports` map pointing at `dist` while exposing both composition roots and the shared surface (see design D6: source-only packages break `nest build`) — verify `pnpm --filter @repo/core exec tsc --noEmit` reports no unresolved module
+- [x] 5.3 Rewrite only the imports that cross the new boundary (the composition roots' database/queue imports, and the worker's `../../../src/...` imports) — verify `grep -rn "\.\./\.\./\.\." apps packages` finds no relative import escaping its own package
+- [x] 5.4 Run the 187 unit tests from inside the package — verify they pass unmodified apart from import paths, confirming the move changed no behaviour
 
 ## 6. `@repo/shared` — the framework-agnostic vocabulary (its own commit)
 
-- [ ] 6.1 Extract the primitives that need no framework into `packages/shared`: the supported event types, the queue name and job name, the idempotency constants and header contract, the processing result type, the processing error classes, and the demo-scenario mapping — verify the package declares no framework, database, or queue dependency and that importing it initialises none of them
-- [ ] 6.2 Point `core` at the extracted modules and delete the originals — verify the unit suite is green, which is the gate for the only non-move step in this change
-- [ ] 6.3 Add the package's manifest, a `build` script compiling to `dist/` with its `exports` pointing there, and an extended `typescript-config` preset, and declare it as a dependency of `core` and `apps/web` — verify the workspace reports at least two consumers, satisfying the "no single-consumer package" rule
-- [ ] 6.4 Verify the extraction took only framework-agnostic code: DTOs carrying framework decorators stay in `core` — verify `shared`'s transitive runtime imports contain no NestJS, Prisma, or BullMQ module
+- [x] 6.1 Extract the primitives that need no framework into `packages/shared`: the supported event types, the queue name and job name, the idempotency constants and header contract, the processing result type, the processing error classes, and the demo-scenario mapping — verify the package declares no framework, database, or queue dependency and that importing it initialises none of them
+- [x] 6.2 Point `core` at the extracted modules and delete the originals — verify the unit suite is green, which is the gate for the only non-move step in this change
+- [x] 6.3 Add the package's manifest, a `build` script compiling to `dist/` with its `exports` pointing there, and an extended `typescript-config` preset, and declare it as a dependency of `core` and `apps/web` — verify the workspace reports at least two consumers, satisfying the "no single-consumer package" rule
+- [x] 6.4 Verify the extraction took only framework-agnostic code: DTOs carrying framework decorators stay in `core` — verify `shared`'s transitive runtime imports contain no NestJS, Prisma, or BullMQ module
 
 ## 7. `apps/api` — the HTTP entrypoint and its suites
 

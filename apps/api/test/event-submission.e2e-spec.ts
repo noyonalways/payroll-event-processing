@@ -2,10 +2,9 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { randomUUID } from 'crypto';
-import { AppModule } from '../src/app.module';
-import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
-import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '../src/common/idempotency/idempotency.constants';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule, HttpExceptionFilter } from '@repo/core';
+import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '@repo/shared';
+import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
 
 /**

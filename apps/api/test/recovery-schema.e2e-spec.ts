@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { AppModule } from '../src/app.module';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule } from '@repo/core';
+import { PrismaService } from '@repo/database';
 
 /**
  * Integration coverage for the `concurrency-and-crash-recovery` migration:

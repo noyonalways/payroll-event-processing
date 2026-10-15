@@ -3,11 +3,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { randomUUID } from 'crypto';
 import { AttemptErrorType, AttemptStatus } from '@prisma/client';
-import { AppModule } from '../src/app.module';
-import { WorkerModule } from '../apps/worker/src/worker.module';
-import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
-import { setupSwagger } from '../src/common/swagger/setup-swagger';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule, HttpExceptionFilter, setupSwagger, WorkerModule } from '@repo/core';
+import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
 
 /**
