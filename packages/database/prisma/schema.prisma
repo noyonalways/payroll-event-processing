@@ -148,6 +148,11 @@ model PayrollEvent {
 
   @@unique([organizationId, employeeId, sequence])
   @@index([organizationId, status])
+  // Serves the event-history pages (events-query-api): the equality prefix
+  // (organization_id, status) fixes a contiguous index range already ordered
+  // created_at DESC, id DESC, so newest-first pages — including cursor seek
+  // continuations — read exactly the requested rows with no sort step.
+  @@index([organizationId, status, createdAt(sort: Desc), id(sort: Desc)])
   @@index([organizationId, employeeId, createdAt])
   @@index([idempotencyKey])
   @@map("payroll_events")

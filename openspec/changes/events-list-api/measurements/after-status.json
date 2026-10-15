@@ -1,0 +1,75 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Limit",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 0.28,
+      "Total Cost": 27.57,
+      "Plan Rows": 21,
+      "Plan Width": 95,
+      "Actual Startup Time": 0.037,
+      "Actual Total Time": 0.049,
+      "Actual Rows": 21,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 4,
+      "Shared Read Blocks": 2,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Scan Direction": "Forward",
+          "Index Name": "payroll_events_organization_id_status_created_at_id_idx",
+          "Relation Name": "payroll_events",
+          "Alias": "payroll_events",
+          "Startup Cost": 0.28,
+          "Total Cost": 195.22,
+          "Plan Rows": 150,
+          "Plan Width": 95,
+          "Actual Startup Time": 0.035,
+          "Actual Total Time": 0.047,
+          "Actual Rows": 21,
+          "Actual Loops": 1,
+          "Index Cond": "((organization_id = '11111111-1111-1111-1111-111111111111'::text) AND (status = 'QUEUED'::\"EventStatus\"))",
+          "Rows Removed by Index Recheck": 0,
+          "Shared Hit Blocks": 4,
+          "Shared Read Blocks": 2,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        }
+      ]
+    },
+    "Planning": {
+      "Shared Hit Blocks": 236,
+      "Shared Read Blocks": 1,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0
+    },
+    "Planning Time": 2.013,
+    "Triggers": [
+    ],
+    "Execution Time": 0.085
+  }
+]

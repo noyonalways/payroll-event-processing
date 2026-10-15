@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RecordSubmissionInput } from '../lib/useEventTracker';
 import { SubmitForm } from './SubmitForm';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -91,10 +90,6 @@ describe('SubmitForm', () => {
 
     expect(await screen.findByText(/evt-default/)).toBeInTheDocument();
     expect(onSubmitted).toHaveBeenCalledTimes(1);
-    expect(onSubmitted.mock.calls[0][0]).toMatchObject({
-      eventType: 'BANK_ACCOUNT_CHANGE',
-      employeeId: 'EMP-DEMO-SUCCESS',
-    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' });
@@ -166,11 +161,6 @@ describe('SubmitForm', () => {
     expect(screen.getByText(/evt-1/)).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(onSubmitted).toHaveBeenCalledTimes(1);
-    expect(onSubmitted.mock.calls[0][0]).toMatchObject({
-      id: 'evt-1',
-      eventType: 'BANK_ACCOUNT_CHANGE',
-      employeeId: 'emp-1',
-    });
 
     // Second submit: re-fill the (back-to-defaults) form and submit again.
     fetchMock.mockResolvedValue(
@@ -182,18 +172,12 @@ describe('SubmitForm', () => {
 
     expect(spy).toHaveBeenCalledTimes(2);
     expect(onSubmitted).toHaveBeenCalledTimes(2);
-    const submissions = onSubmitted.mock.calls.map(
-      ([submission]) => submission as RecordSubmissionInput,
-    );
-    expect(submissions[0].idempotencyKey).not.toBe(submissions[1].idempotencyKey);
-
     const keys = fetchMock.mock.calls.map(([, init]) => {
       const headers = (init as RequestInit).headers as Record<string, string>;
       return headers['Idempotency-Key'];
     });
     expect(keys).toHaveLength(2);
-    expect(keys[0]).toBe(submissions[0].idempotencyKey);
-    expect(new Set(keys).size).toBe(2);
+    expect(new Set(keys).size).toBe(2); // a fresh key per submit
   });
 
   it('re-prefills the employee id and shows the watch-for hint when the demo scenario changes', async () => {
@@ -227,9 +211,7 @@ describe('SubmitForm', () => {
       (fetchMock.mock.calls[0][1] as RequestInit).body as string,
     );
     expect(body.payload.employeeId).toBe('EMP-DEMO-PERMANENT');
-    expect(onSubmitted.mock.calls[0][0]).toMatchObject({
-      employeeId: 'EMP-DEMO-PERMANENT',
-    });
+    expect(onSubmitted).toHaveBeenCalledTimes(1);
   });
 
   it('preserves the selected scenario across a reset', async () => {

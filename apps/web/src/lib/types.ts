@@ -115,6 +115,40 @@ export interface EventStatusResponse {
   attempts: EventAttempt[];
 }
 
+/**
+ * One row of the event-history page (GET /events, events-query-api): identity,
+ * shape, and timing only — deliberately no payload, attempt trail, or result.
+ */
+export interface EventListItem {
+  id: string;
+  eventType: EventType;
+  employeeId: string;
+  sequence: number;
+  status: LifecycleStatus;
+  createdAt: string;
+  updatedAt: string;
+  processedAt: string | null;
+}
+
+/** Body of GET /events: one explicit page with its forward cursor. */
+export interface EventListResponse {
+  data: EventListItem[];
+  nextCursor: string | null;
+  limit: number;
+}
+
+/** The query parameters GET /events accepts, as the UI sends them. */
+export interface EventListQuery {
+  status?: LifecycleStatus;
+  eventType?: EventType;
+  employeeId?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+  /** Page size (1–100); the API defaults to 20 when omitted. */
+  limit?: number;
+  cursor?: string;
+}
+
 /** Role held within an organization (mirrors the Prisma membership enum). */
 export type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 

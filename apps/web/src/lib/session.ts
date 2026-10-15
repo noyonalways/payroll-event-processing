@@ -8,10 +8,10 @@ import type {
 /**
  * The signed-in session: persists it across reloads and is the app's single
  * source of truth for "am I signed in". Kept in localStorage (not
- * sessionStorage) so the session survives a reload and a reopened tab, matching
- * the tracked-event list. A write notifies subscribers, so a forced sign-out
- * (rejected refresh) flips the UI back to the sign-in view with no extra
- * plumbing.
+ * sessionStorage) so the session survives a reload and a reopened tab — the
+ * only thing the app persists. A write notifies subscribers, so a forced
+ * sign-out (rejected refresh) flips the UI back to the sign-in view with no
+ * extra plumbing.
  *
  * Reads tolerate missing or corrupt values: a bad entry is dropped, never
  * thrown, and the app falls back to the sign-in view.

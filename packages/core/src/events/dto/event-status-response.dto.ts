@@ -1,5 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { EventAttemptDto } from './event-attempt.dto';
+import {
+  EVENT_LIFECYCLE_STATUSES,
+  EventLifecycleStatus,
+} from './event-lifecycle';
 
 /**
  * Response body of GET /events/{id} (event-status-api): the event's current
@@ -33,14 +37,14 @@ export class EventStatusResponseDto {
   sequence!: number;
 
   @ApiProperty({
-    enum: ['received', 'queued', 'processing', 'success', 'failed'],
+    enum: EVENT_LIFECYCLE_STATUSES,
     example: 'queued',
     description:
       'Current lifecycle status. With the transactional claim, `processing` is ' +
       'only observable inside a live transaction — polling clients see `queued` ' +
       'or a terminal state.',
   })
-  status!: 'received' | 'queued' | 'processing' | 'success' | 'failed';
+  status!: EventLifecycleStatus;
 
   @ApiProperty({
     example: {

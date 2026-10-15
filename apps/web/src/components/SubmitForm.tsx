@@ -24,13 +24,12 @@ import {
   scenarioById,
 } from '../lib/scenarios';
 import type { DemoScenarioId } from '../lib/scenarios';
-import type { RecordSubmissionInput } from '../lib/useEventTracker';
 import { EVENT_TYPES } from '../lib/types';
 import type { EventSubmissionResponse, EventType } from '../lib/types';
 
 export interface SubmitFormProps {
-  /** Called with the created event details so the tracker can persist them. */
-  onSubmitted: (submission: RecordSubmissionInput) => void;
+  /** Called after a 201 so the history view can refresh page one. */
+  onSubmitted: () => void;
 }
 
 /**
@@ -40,8 +39,9 @@ export interface SubmitFormProps {
  * tweak a single field. Client-side checks block obviously incomplete
  * submissions; the API stays the authority — a structured 400 is surfaced
  * inline without losing the entered values. Every submit uses a fresh
- * `crypto.randomUUID()` as the `Idempotency-Key`, and a 201 adds the event
- * (with its key) to the tracker and displays the returned id/status.
+ * `crypto.randomUUID()` as the `Idempotency-Key`, and a 201 tells the parent
+ * to refresh the history page one — the server list is the only place events
+ * are shown, so nothing is added locally.
  */
 export function SubmitForm({ onSubmitted }: SubmitFormProps) {
   const [eventType, setEventType] = useState<EventType>('BANK_ACCOUNT_CHANGE');
@@ -119,12 +119,9 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
       // immediately, and changing one or two fields is a trivial tweak. The
       // demo scenario is preserved so repeated runs demo the same case.
       setValues(nextValues(eventType, scenario));
-      onSubmitted({
-        id: response.id,
-        eventType,
-        employeeId: payload.employeeId,
-        idempotencyKey,
-      });
+      // The history list is server-owned: refreshing page one is how the new
+      // event shows up (without a reload and without any local tracking).
+      onSubmitted();
     } catch (err) {
       setApiError(
         err instanceof ApiError || err instanceof NetworkError

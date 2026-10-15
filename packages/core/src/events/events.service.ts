@@ -1,4 +1,4 @@
-import { Injectable, Logger, HttpStatus, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '@repo/database';
@@ -7,6 +7,11 @@ import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 import { PayloadValidator } from './payload.validator';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
+import {
+  DEFAULT_PAGE_LIMIT,
+  EventListItemDto,
+  EventListResponseDto,
+} from './dto/events-list.dto';
 
 export interface CreateEventInput {
   eventType: EventType;
@@ -17,6 +22,80 @@ export interface CreateEventInput {
 export interface SubmissionResult {
   httpStatus: number;
   body: Record<string, unknown>;
+}
+
+/**
+ * Filters and pagination controls of the event-history query (events-query-api).
+ * All fields optional; values are already DTO-validated at the HTTP boundary.
+ */
+export interface EventListFilters {
+  status?: string;
+  eventType?: EventType;
+  employeeId?: string;
+  /** Inclusive ISO-8601 lower bound on created_at. */
+  createdAfter?: string;
+  /** Inclusive ISO-8601 upper bound on created_at. */
+  createdBefore?: string;
+  limit?: number;
+  cursor?: string | null;
+}
+
+/**
+ * A pagination position: the (created_at, id) pair of the last row served.
+ * Versioned so the encoding can evolve without silently misdialing old tokens.
+ */
+interface EventListCursor {
+  v: number;
+  /** ISO-8601 creation timestamp of the last row of the previous page. */
+  t: string;
+  /** Event id of the last row of the previous page (tiebreaker). */
+  i: string;
+}
+
+const CURSOR_VERSION = 1;
+
+/**
+ * The opaque `nextCursor` token for the page following `row`: a base64url
+ * (hence URL-safe) encoding of the versioned (created_at, id) position.
+ */
+export function encodeEventListCursor(row: {
+  createdAt: Date;
+  id: string;
+}): string {
+  const payload: EventListCursor = {
+    v: CURSOR_VERSION,
+    t: row.createdAt.toISOString(),
+    i: row.id,
+  };
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+/**
+ * Decodes a client-supplied cursor back into its seek position. An
+ * undecodable, foreign, or corrupt token is a structured 400 — treating it as
+ * "page one" would silently re-serve data the client has already seen.
+ */
+export function decodeEventListCursor(cursor: string): EventListCursor {
+  let parsed: unknown;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    parsed = JSON.parse(decoded);
+  } catch {
+    throw new BadRequestException('cursor is not a valid event-list cursor');
+  }
+  const c = parsed as Partial<EventListCursor> | null;
+  if (
+    typeof c !== 'object' ||
+    c === null ||
+    c.v !== CURSOR_VERSION ||
+    typeof c.t !== 'string' ||
+    Number.isNaN(Date.parse(c.t)) ||
+    typeof c.i !== 'string' ||
+    c.i.length === 0
+  ) {
+    throw new BadRequestException('cursor is not a valid event-list cursor');
+  }
+  return c as EventListCursor;
 }
 
 /**
@@ -162,6 +241,103 @@ export class EventsService {
         result: attempt.result ? (attempt.result as Record<string, unknown>) : null,
         createdAt: attempt.createdAt.toISOString(),
       })),
+    };
+  }
+
+  /**
+   * Read-only event-history page (events-query-api, design D1/D2), scoped to the
+   * caller's organization — the same required-first-argument convention as
+   * createEvent/getEventStatus. ONE findMany over `payroll_events` with a
+   * narrow projection (payload, result, and the attempt trail are never read),
+   * ordered `created_at DESC, id DESC`, filters AND-composed into the same
+   * WHERE. Keyset pagination (D1): a cursor continues strictly after its
+   * (created_at, id) position, so pages never shift while new events arrive.
+   *
+   * Strictly read-only (design D6): no create/update/delete call exists on this
+   * path, nothing is enqueued — listing history can never affect lifecycle
+   * state.
+   */
+  async listEvents(
+    organizationId: string,
+    filters: EventListFilters = {},
+  ): Promise<EventListResponseDto> {
+    const limit = filters.limit ?? DEFAULT_PAGE_LIMIT;
+    const seek = filters.cursor ? decodeEventListCursor(filters.cursor) : null;
+    const seekTime = seek ? new Date(seek.t) : null;
+
+    // Every condition is AND-composed by Prisma into ONE where clause: the
+    // tenant boundary always holds, filters narrow it, and the cursor seek
+    // continues the CURRENTLY FILTERED selection (it never restarts the
+    // unfiltered query).
+    const where: Prisma.PayrollEventWhereInput = {
+      organizationId,
+      ...(filters.status
+        ? { status: filters.status.toUpperCase() as EventStatus }
+        : {}),
+      ...(filters.eventType ? { eventType: filters.eventType } : {}),
+      ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
+      ...(filters.createdAfter || filters.createdBefore
+        ? {
+            createdAt: {
+              ...(filters.createdAfter
+                ? { gte: new Date(filters.createdAfter) }
+                : {}),
+              ...(filters.createdBefore
+                ? { lte: new Date(filters.createdBefore) }
+                : {}),
+            },
+          }
+        : {}),
+      // "Strictly after the cursor" under created_at DESC, id DESC ordering:
+      // createdAt earlier than the cursor's, or the same instant with a smaller
+      // id. The id tiebreaker makes the position exact even when a burst of
+      // submissions shares one timestamp.
+      ...(seek && seekTime
+        ? {
+            OR: [
+              { createdAt: { lt: seekTime } },
+              { createdAt: seekTime, id: { lt: seek.i } },
+            ],
+          }
+        : {}),
+    };
+
+    const rows = await this.prisma.payrollEvent.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      // One extra row answers "is there a next page?" without a second count.
+      take: limit + 1,
+      select: {
+        id: true,
+        eventType: true,
+        employeeId: true,
+        sequence: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        processedAt: true,
+      },
+    });
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    return {
+      data: page.map(
+        (row): EventListItemDto => ({
+          id: row.id,
+          eventType: row.eventType,
+          employeeId: row.employeeId,
+          // BigInt is not JSON-serializable — coerce at the API boundary (Number).
+          sequence: Number(row.sequence),
+          status: row.status.toLowerCase() as EventListItemDto['status'],
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+          processedAt: row.processedAt ? row.processedAt.toISOString() : null,
+        }),
+      ),
+      nextCursor: hasMore ? encodeEventListCursor(page[page.length - 1]) : null,
+      limit,
     };
   }
 

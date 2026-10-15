@@ -1,6 +1,7 @@
-import { HttpStatus, NotFoundException } from '@nestjs/common';
+import { HttpStatus, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { EventsService, CreateEventInput } from './events.service';
+import { EventsService, CreateEventInput, encodeEventListCursor } from './events.service';
+import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from './dto/events-list.dto';
 import { PayloadValidator } from './payload.validator';
 import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
@@ -18,7 +19,7 @@ describe('EventsService', () => {
     payrollEvent: { create: jest.fn() },
   };
   const prisma = {
-    payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn() },
+    payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
     eventAttempt: { findMany: jest.fn() },
   };
   const eventQueue = { enqueue: jest.fn() };
@@ -68,6 +69,7 @@ describe('EventsService', () => {
     prisma.payrollEvent.updateMany.mockReset();
     prisma.payrollEvent.updateMany.mockResolvedValue({ count: 1 });
     prisma.payrollEvent.findFirst.mockReset();
+    prisma.payrollEvent.findMany.mockReset();
     prisma.eventAttempt.findMany.mockReset();
     eventQueue.enqueue.mockReset();
     eventQueue.enqueue.mockResolvedValue(undefined);
@@ -358,6 +360,184 @@ describe('EventsService', () => {
         processedAt: '2026-08-26T00:40:13.000Z',
       });
       expect(roundTripped.attempts).toEqual([]);
+    });
+  });
+  describe('listEvents (read-only, tenant-scoped, events-query-api)', () => {
+    // Rows exactly as Prisma's findMany with the narrow select returns them.
+    const historyRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 'evt-1',
+      eventType: 'BANK_ACCOUNT_CHANGE',
+      employeeId: 'emp-1',
+      sequence: 3n,
+      status: 'SUCCESS',
+      createdAt: new Date('2026-08-26T00:40:12.000Z'),
+      updatedAt: new Date('2026-08-26T00:40:13.000Z'),
+      processedAt: new Date('2026-08-26T00:40:13.000Z'),
+      ...overrides,
+    });
+
+    const fullPayloadRow = () => ({
+      ...historyRow(),
+      // Fields the projection must never carry — a faithful Prisma row has them
+      // without `select`, so their absence proves the projection is narrow.
+      payload: { employeeId: 'emp-1', iban: 'DE89370400440532013000' },
+      result: { reference: 'SIM-1' },
+      idempotencyKey: 'k-1',
+    });
+
+    it('scopes the page to the caller’s organization, even with an employeeId filter', async () => {
+      // Two organizations use the SAME employee number; org-b's rows must be
+      // unreachable no matter what filters the caller sends.
+      prisma.payrollEvent.findMany.mockResolvedValue([]);
+
+      await service.listEvents(OTHER_ORG, { employeeId: 'emp-1' });
+
+      expect(prisma.payrollEvent.findMany).toHaveBeenCalledTimes(1);
+      const args = prisma.payrollEvent.findMany.mock.calls[0][0];
+      expect(args.where.organizationId).toBe(OTHER_ORG);
+      expect(args.where.employeeId).toBe('emp-1');
+    });
+
+    it('orders newest first with (created_at DESC, id DESC) and takes limit+1', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue([]);
+
+      await service.listEvents(ORG, { limit: 5 });
+
+      const args = prisma.payrollEvent.findMany.mock.calls[0][0];
+      expect(args.orderBy).toEqual([
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ]);
+      // One extra row answers "is there a next page?" without a count query.
+      expect(args.take).toBe(6);
+    });
+
+    it('defaults the page size to 20 when the caller omits limit', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue([]);
+
+      const result = await service.listEvents(ORG);
+
+      const args = prisma.payrollEvent.findMany.mock.calls[0][0];
+      expect(args.take).toBe(DEFAULT_PAGE_LIMIT + 1);
+      expect(result.limit).toBe(DEFAULT_PAGE_LIMIT);
+    });
+
+    it('composes every filter AND-ed into ONE where (status uppercased, dates bounded)', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue([]);
+
+      await service.listEvents(ORG, {
+        status: 'failed',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-7',
+        createdAfter: '2026-08-01T00:00:00.000Z',
+        createdBefore: '2026-08-31T23:59:59.999Z',
+      });
+
+      const args = prisma.payrollEvent.findMany.mock.calls[0][0];
+      expect(args.where).toMatchObject({
+        organizationId: ORG,
+        status: 'FAILED', // wire 'failed' → stored enum
+        eventType: 'SALARY_CHANGE',
+        employeeId: 'emp-7',
+        createdAt: {
+          gte: new Date('2026-08-01T00:00:00.000Z'), // inclusive
+          lte: new Date('2026-08-31T23:59:59.999Z'), // inclusive
+        },
+      });
+    });
+
+    it('decodes the cursor into a seek position strictly after the last served row', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue([]);
+      const cursor = encodeEventListCursor({
+        createdAt: new Date('2026-08-26T00:40:12.000Z'),
+        id: 'evt-last',
+      });
+
+      await service.listEvents(ORG, { cursor });
+
+      const args = prisma.payrollEvent.findMany.mock.calls[0][0];
+      expect(args.where.OR).toEqual([
+        { createdAt: { lt: new Date('2026-08-26T00:40:12.000Z') } },
+        {
+          createdAt: new Date('2026-08-26T00:40:12.000Z'),
+          id: { lt: 'evt-last' },
+        },
+      ]);
+    });
+
+    it('rejects an undecodable cursor as a structured 400', async () => {
+      await expect(service.listEvents(ORG, { cursor: '@@not-a-cursor@@' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.listEvents(ORG, { cursor: Buffer.from('{"v":2}').toString('base64url') })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.payrollEvent.findMany).not.toHaveBeenCalled();
+    });
+
+    it('moves the cursor to the last row of the page only when a further row exists', async () => {
+      const rows = [1, 2, 3].map((n) => historyRow({ id: `evt-${n}` }));
+      prisma.payrollEvent.findMany.mockResolvedValue(rows);
+
+      const full = await service.listEvents(ORG, { limit: 2 });
+
+      expect(full.data).toHaveLength(2);
+      expect(full.limit).toBe(2);
+      // The third row exists but is not served; the cursor points at the last
+      // row OF the page, so the next page continues exactly after it.
+      expect(JSON.parse(Buffer.from(full.nextCursor!, 'base64url').toString('utf8'))).toEqual({
+        v: 1,
+        t: '2026-08-26T00:40:12.000Z',
+        i: 'evt-2',
+      });
+
+      // Last page: every row served, no cursor — the walk terminates.
+      prisma.payrollEvent.findMany.mockResolvedValue([rows[2]]);
+      const last = await service.listEvents(ORG, { limit: 2 });
+      expect(last.data).toHaveLength(1);
+      expect(last.nextCursor).toBeNull();
+    });
+
+    it('projects a narrow row: no payload, result, idempotency key, or attempts', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue([fullPayloadRow()]);
+
+      const result = await service.listEvents(ORG, { limit: 1 });
+
+      const item = result.data[0];
+      expect(item).toEqual({
+        id: 'evt-1',
+        eventType: 'BANK_ACCOUNT_CHANGE',
+        employeeId: 'emp-1',
+        sequence: 3, // BigInt coerced to Number — never leaks raw BigInt
+        status: 'success', // enum lowercased to the documented wire format
+        createdAt: '2026-08-26T00:40:12.000Z',
+        updatedAt: '2026-08-26T00:40:13.000Z',
+        processedAt: '2026-08-26T00:40:13.000Z',
+      });
+      expect(JSON.parse(JSON.stringify(item))).not.toHaveProperty('payload');
+      expect(JSON.parse(JSON.stringify(item))).not.toHaveProperty('result');
+      // The service never drafted the heavy columns it does not serve.
+      const select = prisma.payrollEvent.findMany.mock.calls[0][0].select;
+      expect(select.payload).toBeUndefined();
+      expect(select.result).toBeUndefined();
+    });
+
+    it('issues no writes: only the one findMany happens', async () => {
+      prisma.payrollEvent.findMany.mockResolvedValue(
+        Array.from({ length: MAX_PAGE_LIMIT }, (_, i) => historyRow({ id: `evt-${i}` })),
+      );
+
+      await service.listEvents(ORG, { limit: 10, status: 'queued' });
+
+      // Read path signature: exactly one findMany — no create/update/upsert on
+      // events or attempts, and no queue work. Listing history can never touch
+      // lifecycle state (design D6).
+      expect(prisma.payrollEvent.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
+      expect(prisma.payrollEvent.findFirst).not.toHaveBeenCalled();
+      expect(prisma.eventAttempt.findMany).not.toHaveBeenCalled();
+      expect(eventQueue.enqueue).not.toHaveBeenCalled();
+      expect(idempotency.execute).not.toHaveBeenCalled();
     });
   });
 });

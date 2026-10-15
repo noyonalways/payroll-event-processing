@@ -1,5 +1,4 @@
 import { clearSession, getSession, setSession } from '../lib/session';
-import { clearTrackedEvents } from '../lib/storage';
 import type { ErrorResponseBody } from '@repo/shared';
 import type { SessionResponse } from '../lib/types';
 
@@ -43,8 +42,9 @@ export class NetworkError extends Error {
 
 /**
  * The session could not be renewed: the refresh token was rejected (unknown,
- * expired, or already rotated away). The session and the tracked-event list
- * have been cleared, so the UI is already back at the sign-in step.
+ * expired, or already rotated away). The session has been cleared, so the UI
+ * is already back at the sign-in step. The event history needs no clearing —
+ * it is server-owned and re-scoped by whatever session signs in next.
  */
 export class SessionExpiredError extends Error {
   constructor(cause?: unknown) {
@@ -150,9 +150,8 @@ async function performRefresh(): Promise<void> {
   setSession(rotated);
 }
 
-/** Local sign-out: drop the session and the tracked-event list together. */
+/** Local sign-out: drop the session (the history is server-owned, not local). */
 function expireSession(): void {
-  clearTrackedEvents();
   clearSession();
 }
 

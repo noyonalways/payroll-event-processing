@@ -28,6 +28,10 @@
 >   Dockerfiles build from the workspace root with app-filtered installs; CI runs turbo
 >   tasks per member. Runtime behaviour unchanged — the 187 unit + 66 e2e + 78 frontend
 >   tests are the same suites that gated the pre-move commit.
+> - Change 14 (`events-list-api`) ✅ — read-only `GET /events` history: keyset-paginated
+>   (`created_at DESC, id DESC` cursor), combinable validated filters, tenant-scoped by the
+>   token's organization; the measured composite index behind it (§7.3a); the web UI's
+>   history view replaces the localStorage tracked list (§7.3a).
 >
 > **Scope:** Full-system architecture + visual flows (roadmap changes 2–12; the workspace
 > conversion is recorded in `openspec/changes/turborepo-workspace`).
@@ -73,10 +77,12 @@ See the **System Architecture** diagram in eraser.io. In prose:
                     │    signed access token, never the request   │
                     │  AuthController (POST /auth/*, GET /auth/me)│
                     │  EventsController (POST /events,         │
-                    │    GET /events/:id — read-only status)     │
-                    │  EventsService: validate → dedupe →        │
-                    │    persist → enqueue → status read — every  │
-                    │    tenant query filtered by the caller's org│
+                    │    GET /events — read-only paginated     │
+                    │    history, GET /events/:id — status)    │
+                    │  EventsService: validate → dedupe →      │
+                    │    persist → enqueue → status + history  │
+                    │    reads — every tenant query filtered by│
+                    │    the caller's org                      │
                     └───────┬─────────────────▲──────────────────┘
                             │ Prisma          │ 201 { id, status }
                  ┌──────────▼──────────┐   ┌──┴──────────────┐
@@ -111,13 +117,13 @@ their composition roots (design D4).
 
 | Component | Responsibility | Reliability role |
 |---|---|---|
-| **HTTP API app** (`apps/api/`) | Entrypoint around the composition root in `@repo/core`: deny-by-default `JwtAuthGuard`; DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue | Idempotency, fast response, tenant boundary |
+| **HTTP API app** (`apps/api/`) | Entrypoint around the composition root in `@repo/core`: deny-by-default `JwtAuthGuard`; DTO validation (class-validator class-transformer), per-type validation rules, shared idempotency layer (`IdempotencyService` store-and-replay), persist + enqueue, and the read paths (paginated history + status) | Idempotency, fast response, tenant boundary |
 | **Auth & tenancy** (`packages/core/src/auth/`) | Registration/login/refresh/logout, scrypt password hashing, `TokenService` (signed access JWT + hashed refresh rows), the guard that resolves `{ userId, organizationId, role }` from the token | Identity, tenancy boundary |
 | **Redis / BullMQ** (connection in `@repo/database`, producer + FIFO semantics in `@repo/core`) | Job queue keyed per employee **within an organization** (tenant-qualified `jobId` → FIFO), delayed jobs for backoff, stalled-job detection | Ordering, retries, crash recovery |
 | **Worker app** (`apps/worker/`) | Consumer entrypoint around the worker composition root in `@repo/core`: claim job, side-effect marker (`processing`), row lock, handler dispatch, provider call, transactional commit — all scoped by the job's organization | Exactly-once, concurrency, recovery, tenant isolation |
 | **PostgreSQL / Prisma** (`packages/database/`) | `payroll_events` + `event_attempts` + `worker_heartbeats` + tenancy/identity tables, unique constraints, status transition guard, `SELECT … FOR UPDATE` (plain) row lock inside an interactive `$transaction` | Ground truth, atomicity, dedup, tenant ownership |
 | **Simulated provider** (`packages/core/src/processing/`) | Random temp/perm failure (`PAYROLL_TEMPORARY_FAILURE_RATE`, `PAYROLL_PERMANENT_FAILURE_RATE`) | Testability of failure paths |
-| **Demo UI** (`apps/web/`) | React/Vite two-pane app against the same API; imports the event-type contract and error-body shape from `@repo/shared` — a browser bundle with no database or queue client in it | Reviewer/demo surface |
+| **Demo UI** (`apps/web/`) | React/Vite two-pane app against the same API; the event list is the server-driven history (`GET /events`: filters, cursor load-more) with per-row status polling — imports the event-type contract and error-body shape from `@repo/shared` — a browser bundle with no database or queue client in it | Reviewer/demo surface |
 
 ## 4. Event lifecycle
 
@@ -324,6 +330,35 @@ claim is rolled back on any abort, polling between BullMQ retry attempts observe
 `queued` with the attempts that have already run on the trail — never a stuck
 `processing`.
 
+### 7.3a Read-only event history (`GET /events`, events-query-api)
+
+The list endpoint is the other read path — READ-ONLY by construction (one `findMany`,
+no create/update/delete call exists on it, nothing enqueued), so listing history can
+never affect lifecycle state. Both reads live beside each other in `EventsService`
+and take the caller's organization as their required first argument, so the tenant
+boundary cannot diverge between them.
+
+1. Client → `GET /events?status=&eventType=&employeeId=&createdAfter=&createdBefore=&limit=&cursor=`
+   with `Authorization: Bearer <accessToken>`. The query DTO is validated
+   deny-by-default — every accepted parameter is declared, so an undeclared query
+   parameter, an unknown status/eventType, a malformed date, or `limit` outside 1–100
+   is a structured `400` via the global pipe and filter.
+2. ONE `findMany` over `payroll_events`: `WHERE` composed with AND — `organization_id`
+   from the token plus any filters — `ORDER BY created_at DESC, id DESC`, `LIMIT page+1`.
+   The projection is narrow (id, type, employee, sequence, status, timestamps): payload,
+   result, and the attempt trail are the single-event contract, and leaving them out
+   keeps 100-row pages light.
+3. **Keyset pagination** (design D1): `nextCursor` is a versioned
+   (`{v,t,i}`) base64url token carrying the last row's `(created_at, id)`; a
+   continuation seeks strictly after that position — `createdAt < t OR (createdAt = t
+   AND id < i)` — so pages never shift while new events arrive (unlike offset
+   pagination), and burst rows sharing one timestamp cannot both be "next". An
+   undecodable cursor is a `400`, never silently page one.
+4. The composite index `(organization_id, status, created_at DESC, id DESC)` (added by
+   migration `20261015180615`, measured in `index-measurements.md`) turns the
+   status-filtered pages — the UI's common view — into pure index scans that read
+   exactly the requested rows with no sort at any page depth.
+
 ### 7.4 Authentication & session flows (multi-tenant foundation, change 12)
 
 **Register** — `POST /auth/register { email, password, organizationName, name? }`: one
@@ -393,9 +428,10 @@ a bearer token.
 | 7 `concurrency-and-crash-recovery` ✅ | row lock + transactional claim/terminal commit, event_attempts audit, stalled-job recovery config, worker heartbeats + /health liveness |
 | 8 `event-status-api` ✅ | GET /events/:id — read-only status + attempt trail (remaining roadmap: GET /events list, GET /events/:id/history) |
 | 9 `minimal-frontend` ✅ | demo UI (submit / live status / detail) with scenario selector |
-| 10 `test-suite` ✅ | unit + e2e incl. recovery + frontend Vitest (111 / 40 / 52 when shipped; 187 / 66 / 78 today) |
+| 10 `test-suite` ✅ | unit + e2e incl. recovery + frontend Vitest (111 / 40 / 52 when shipped; 233 / 83 / 84 today) |
 | 11 `ci-and-docs` ✅ | `.github/workflows/ci.yml` (backend + frontend + e2e jobs), README + this doc — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
 | 12 `multi-tenant-foundation` ✅ | `organizations`/`users`/`memberships`/`refresh_tokens`; required `organization_id` on `payroll_events` + `idempotency_records` with tenant-qualified unique keys and tenant-leading indexes; `POST /auth/register\|login\|refresh\|logout` + `GET /auth/me` (short-lived access JWTs, single-use rotating refresh tokens); deny-by-default guard scoped by the token's organization; tenant-qualified queue job ids; backfilling migration with a conditional legacy tenant; frontend sign-in + transparent refresh |
+| 13 `events-list-api` ✅ | `GET /events` — read-only, tenant-scoped, keyset-paginated (`created_at DESC, id DESC` cursor) event history with combinable validated filters; measured composite index `(organization_id, status, created_at DESC, id DESC)` (§7.3a); web UI history view replaces the localStorage tracked list (§7.3a read-model note: the server list is the only source; reloads re-fetch, sessions re-scope) |
 
 ## 10. Decisions (closed — implementation-ready)
 

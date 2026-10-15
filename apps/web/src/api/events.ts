@@ -1,5 +1,7 @@
 import { API_BASE_URL, ApiError, JSON_HEADERS, NetworkError, SessionExpiredError, request } from './client';
 import type {
+  EventListQuery,
+  EventListResponse,
   EventStatusResponse,
   EventSubmissionResponse,
   SubmitEventBody,
@@ -31,6 +33,28 @@ export async function submitEvent(
     body: JSON.stringify(body),
   });
   return { idempotencyKey, response };
+}
+
+/**
+ * GET /events — one page of the organization's event history
+ * (events-query-api). Filters compose with AND; `cursor` follows the previous
+ * page's `nextCursor` for a stable, offset-free walk. Omitted filters are not
+ * sent (everything is optional server-side, and an undeclared-but-sent
+ * parameter would be rejected).
+ */
+export function fetchEventsPage(query: EventListQuery = {}): Promise<EventListResponse> {
+  const params = new URLSearchParams();
+  if (query.status) params.set('status', query.status);
+  if (query.eventType) params.set('eventType', query.eventType);
+  if (query.employeeId) params.set('employeeId', query.employeeId);
+  if (query.createdAfter) params.set('createdAfter', query.createdAfter);
+  if (query.createdBefore) params.set('createdBefore', query.createdBefore);
+  if (query.cursor) params.set('cursor', query.cursor);
+  const qs = params.toString();
+  return request<EventListResponse>(
+    `${API_BASE_URL}/events${qs ? `?${qs}` : ''}`,
+    { headers: JSON_HEADERS },
+  );
 }
 
 /**

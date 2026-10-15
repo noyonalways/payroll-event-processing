@@ -1,10 +1,10 @@
 import { truncateId } from '../lib/format';
-import type { TrackedEvent } from '../lib/storage';
+import type { HistoryRow } from '../lib/useEventHistory';
 import type { RowStatus } from '../lib/status';
 import { StatusBadge } from './StatusBadge';
 
 export interface EventListProps {
-  entries: TrackedEvent[];
+  rows: HistoryRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
@@ -14,29 +14,34 @@ function attemptsLabel(attempts: number): string {
 }
 
 /**
- * Rows for every tracked event. A row whose last poll failed renders the
- * `unavailable` badge; a row with a known per-employee `sequence` shows it.
- * Clicking a row selects it for the detail panel.
+ * Rows for one page-worth of the organization's server-side history. A row
+ * whose last poll failed renders the `unavailable` badge. Clicking a row
+ * selects it for the detail panel.
  */
-export function EventList({ entries, selectedId, onSelect }: EventListProps) {
-  if (entries.length === 0) {
+export function EventList({ rows, selectedId, onSelect }: EventListProps) {
+  if (rows.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-        No events tracked yet — submit one above to watch it progress.
+      <p
+        className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
+        data-testid="event-history-empty"
+      >
+        No events match the current view — adjust the filters or submit an
+        event above. The history is served by the API, so anything submitted in
+        any session appears here.
       </p>
     );
   }
 
   return (
-    <ul className="space-y-2" aria-label="Tracked events">
-      {entries.map((entry) => {
-        const status: RowStatus = entry.error ? 'unavailable' : entry.lastStatus;
-        const isSelected = entry.id === selectedId;
+    <ul className="space-y-2" aria-label="Event history">
+      {rows.map((row) => {
+        const status: RowStatus = row.error ? 'unavailable' : row.status;
+        const isSelected = row.id === selectedId;
         return (
-          <li key={entry.id}>
+          <li key={row.id}>
             <button
               type="button"
-              onClick={() => onSelect(entry.id)}
+              onClick={() => onSelect(row.id)}
               aria-pressed={isSelected}
               className={`flex w-full items-center gap-3 rounded-xl border bg-card px-3 py-2 text-left text-sm shadow-sm transition-colors ${
                 isSelected
@@ -45,18 +50,16 @@ export function EventList({ entries, selectedId, onSelect }: EventListProps) {
               }`}
             >
               <span className="font-mono text-xs text-muted-foreground">
-                {truncateId(entry.id)}
+                {truncateId(row.id)}
               </span>
-              <span className="font-medium">{entry.eventType}</span>
-              <span className="text-muted-foreground">{entry.employeeId}</span>
-              {entry.sequence !== undefined && (
-                <span className="text-xs text-muted-foreground/70">
-                  seq {entry.sequence}
-                </span>
-              )}
+              <span className="font-medium">{row.eventType}</span>
+              <span className="text-muted-foreground">{row.employeeId}</span>
+              <span className="text-xs text-muted-foreground/70">
+                seq {row.sequence}
+              </span>
               <StatusBadge status={status} />
               <span className="ml-auto text-xs text-muted-foreground">
-                {attemptsLabel(entry.attempts)}
+                {attemptsLabel(row.attempts)}
               </span>
             </button>
           </li>

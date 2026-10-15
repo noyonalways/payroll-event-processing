@@ -5,36 +5,44 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiBadRequestResponse,
   ApiBody,
   ApiHeader,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Response } from 'express';
+import { EventType } from '@repo/shared';
 import { AuthenticatedActor } from '../auth/authenticated-actor';
 import { CurrentActor } from '../auth/decorators/current-actor.decorator';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { IdempotencyKey } from '../common/idempotency/idempotency-key.decorator';
 import { IDEMPOTENCY_HEADER } from '@repo/shared';
 import { CreateEventDto } from './dto/create-event.dto';
+import {
+  EVENT_LIFECYCLE_STATUSES,
+} from './dto/event-lifecycle';
 import { EVENT_EXAMPLES } from './dto/event-examples';
 import { EventSubmissionResponseDto } from './dto/event-submission-response.dto';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
+import { EventListResponseDto, EventsListQueryDto } from './dto/events-list.dto';
 import { EventsService } from './events.service';
 
 /**
- * Payroll event endpoints. Both routes are tenant-scoped: the organization comes
+ * Payroll event endpoints. All routes are tenant-scoped: the organization comes
  * from the verified access token via `@CurrentActor()`, never from the request.
- * Neither route carries `@Public()`, so the global guard requires a token — there
+ * No route carries `@Public()`, so the global guard requires a token — there
  * is no way to reach another organization's payroll data.
  */
 @ApiTags('events')
@@ -99,6 +107,90 @@ export class EventsController {
     return result.body;
   }
 
+  /**
+   * GET /events — read-only, paginated event history (events-query-api), scoped
+   * to the caller's organization. Keyset pagination on (created_at, id): passing
+   * the previous page's `nextCursor` continues strictly after that position, so
+   * pages never shift while new events arrive. Filters combine with AND and
+   * compose with the cursor. Strictly read-only — no enqueue, no mutation.
+   */
+  @Get()
+  @ApiOperation({
+    summary: 'List the organization’s payroll events',
+    description:
+      'Read-only: one page of the caller’s organization’s event history, newest ' +
+      'first (created_at DESC, id DESC), with combinable filters (status, ' +
+      'eventType, employeeId, createdAfter/createdBefore) that AND together and ' +
+      'compose with keyset pagination. Pass the previous page’s nextCursor as ' +
+      'cursor to continue the walk; rows carry no payload, result, or attempts. ' +
+      'No Idempotency-Key required.',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: EVENT_LIFECYCLE_STATUSES,
+    description: 'Filter by lifecycle status.',
+  })
+  @ApiQuery({
+    name: 'eventType',
+    required: false,
+    enum: EventType,
+    description: 'Filter by event type.',
+  })
+  @ApiQuery({
+    name: 'employeeId',
+    required: false,
+    type: String,
+    description:
+      'Filter by the submitted employee id, matched within the caller’s organization.',
+  })
+  @ApiQuery({
+    name: 'createdAfter',
+    required: false,
+    type: String,
+    description: 'Inclusive ISO-8601 lower bound on the event creation time.',
+  })
+  @ApiQuery({
+    name: 'createdBefore',
+    required: false,
+    type: String,
+    description: 'Inclusive ISO-8601 upper bound on the event creation time.',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    minimum: 1,
+    maximum: 100,
+    default: 20,
+    description: 'Page size (1–100). Defaults to 20 when omitted.',
+  })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+    description:
+      'Opaque pagination token from a previous page’s nextCursor. An unparsable ' +
+      'value is rejected with 400, not treated as absent.',
+  })
+  @ApiOkResponse({
+    description: 'One page of the organization’s events, newest first',
+    type: EventListResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Invalid filter values, page size, or malformed cursor',
+    type: ErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing, invalid, or expired access token',
+    type: ErrorResponseDto,
+  })
+  async list(
+    @Query() query: EventsListQueryDto,
+    @CurrentActor() actor: AuthenticatedActor,
+  ): Promise<EventListResponseDto> {
+    return this.eventsService.listEvents(actor.organizationId, query);
+  }
   /**
    * GET /events/:id — read-only event status (event-status-api), scoped to the
    * caller's organization. Returns the event's current committed lifecycle state,

@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 
 import { fetchEventStatus } from '../api/events';
 import { truncateId } from '../lib/format';
-import { POLL_INTERVAL_MS } from '../lib/useEventTracker';
+import { POLL_INTERVAL_MS } from '../lib/useEventHistory';
 import { isTerminal } from '../lib/status';
 import type { EventStatusResponse } from '../lib/types';
-import type { TrackedEvent } from '../lib/storage';
+import type { HistoryRow } from '../lib/useEventHistory';
 import { StatusBadge } from './StatusBadge';
 
 export interface EventDetailProps {
-  entry: TrackedEvent;
+  entry: HistoryRow;
 }
 
 function jsonBlock(value: unknown): string {
@@ -46,7 +46,7 @@ export function EventDetail({ entry }: EventDetailProps) {
       );
     };
     load();
-    if (!isTerminal(entry.lastStatus)) {
+    if (!isTerminal(entry.status)) {
       const timer = setInterval(load, POLL_INTERVAL_MS);
       return () => {
         cancelled = true;
@@ -56,7 +56,7 @@ export function EventDetail({ entry }: EventDetailProps) {
     return () => {
       cancelled = true;
     };
-  }, [entry.id, entry.lastStatus]);
+  }, [entry.id, entry.status]);
 
   if (loadError) {
     return (
@@ -72,8 +72,7 @@ export function EventDetail({ entry }: EventDetailProps) {
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           The event may be unreachable (for example after a database reset). The
-          list keeps polling and recovers when the event is reachable again —
-          or you can clear the tracked list.
+          list keeps polling and recovers when the event is reachable again.
         </p>
       </section>
     );

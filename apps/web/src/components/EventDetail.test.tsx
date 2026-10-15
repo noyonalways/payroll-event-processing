@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchEventStatus, NetworkError } from '../api/events';
 import type { EventAttempt, EventStatusResponse } from '../lib/types';
-import type { TrackedEvent } from '../lib/storage';
+import type { HistoryRow } from '../lib/useEventHistory';
 import { EventDetail } from './EventDetail';
 
 vi.mock('../api/events', async (importOriginal) => {
@@ -51,16 +51,17 @@ function detail(
   };
 }
 
-function entry(overrides: Partial<TrackedEvent> = {}): TrackedEvent {
+function entry(overrides: Partial<HistoryRow> = {}): HistoryRow {
   return {
     id: 'e-detail',
     eventType: 'BANK_ACCOUNT_CHANGE',
     employeeId: 'emp-1',
-    lastStatus: 'queued',
-    attempts: 0,
     sequence: 1,
-    submittedAt: '2026-08-26T00:00:00.000Z',
-    idempotencyKey: 'key-detail',
+    status: 'queued',
+    createdAt: '2026-08-26T00:00:00.000Z',
+    updatedAt: '2026-08-26T00:00:00.000Z',
+    processedAt: null,
+    attempts: 0,
     ...overrides,
   };
 }
@@ -89,7 +90,7 @@ describe('EventDetail', () => {
       }),
     );
 
-    render(<EventDetail entry={entry({ lastStatus: 'success' })} />);
+    render(<EventDetail entry={entry({ status: 'success' })} />);
 
     expect(await screen.findByText('2026-08-26T00:00:09.000Z')).toBeInTheDocument();
     // The handler result renders on the section and on the attempt trail.
@@ -114,7 +115,7 @@ describe('EventDetail', () => {
       }),
     );
 
-    render(<EventDetail entry={entry({ lastStatus: 'failed' })} />);
+    render(<EventDetail entry={entry({ status: 'failed' })} />);
 
     expect(await screen.findByText(/simulated provider rejected the change/i))
       .toBeInTheDocument();
@@ -135,7 +136,7 @@ describe('EventDetail', () => {
       }),
     );
 
-    render(<EventDetail entry={entry({ lastStatus: 'failed' })} />);
+    render(<EventDetail entry={entry({ status: 'failed' })} />);
 
     const attempts = await screen.findAllByRole('listitem');
     expect(attempts[0]).toHaveTextContent('Attempt 1');

@@ -1,26 +1,27 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { TrackedEvent } from '../lib/storage';
+import type { HistoryRow } from '../lib/useEventHistory';
 import { EventList } from './EventList';
 
-function tracked(overrides: Partial<TrackedEvent> = {}): TrackedEvent {
+function row(overrides: Partial<HistoryRow> = {}): HistoryRow {
   return {
     id: '12345678-1234-1234-1234-12345678abcd',
     eventType: 'SALARY_CHANGE',
     employeeId: 'emp-9',
-    lastStatus: 'success',
-    attempts: 2,
     sequence: 3,
-    submittedAt: '2026-08-26T00:00:00.000Z',
-    idempotencyKey: 'key-1',
+    status: 'success',
+    createdAt: '2026-08-26T00:00:00.000Z',
+    updatedAt: '2026-08-26T00:00:00.000Z',
+    processedAt: '2026-08-26T00:00:01.000Z',
+    attempts: 2,
     ...overrides,
   };
 }
 
 describe('EventList', () => {
   it('renders a row with id, type, employee, sequence, badge, and attempts', () => {
-    render(<EventList entries={[tracked()]} selectedId={null} onSelect={vi.fn()} />);
+    render(<EventList rows={[row()]} selectedId={null} onSelect={vi.fn()} />);
 
     expect(screen.getByText('12345678…abcd')).toBeInTheDocument();
     expect(screen.getByText('SALARY_CHANGE')).toBeInTheDocument();
@@ -32,7 +33,7 @@ describe('EventList', () => {
 
   it('calls onSelect with the full id on row click', () => {
     const onSelect = vi.fn();
-    render(<EventList entries={[tracked()]} selectedId={null} onSelect={onSelect} />);
+    render(<EventList rows={[row()]} selectedId={null} onSelect={onSelect} />);
 
     fireEvent.click(screen.getByRole('button'));
 
@@ -41,7 +42,7 @@ describe('EventList', () => {
 
   it('marks the selected row as pressed', () => {
     const id = '12345678-1234-1234-1234-12345678abcd';
-    render(<EventList entries={[tracked()]} selectedId={id} onSelect={vi.fn()} />);
+    render(<EventList rows={[row()]} selectedId={id} onSelect={vi.fn()} />);
 
     expect(screen.getByRole('button')).toHaveAttribute('aria-pressed', 'true');
   });
@@ -49,7 +50,7 @@ describe('EventList', () => {
   it('renders an unavailable badge for a row whose last poll failed', () => {
     render(
       <EventList
-        entries={[tracked({ error: 'Could not reach the payroll API' })]}
+        rows={[row({ error: 'Could not reach the payroll API' })]}
         selectedId={null}
         onSelect={vi.fn()}
       />,
@@ -59,9 +60,21 @@ describe('EventList', () => {
     expect(screen.queryByText('Success')).not.toBeInTheDocument();
   });
 
-  it('shows an empty state when nothing is tracked', () => {
-    render(<EventList entries={[]} selectedId={null} onSelect={vi.fn()} />);
+  it('renders the lifecycle badge a queued row polls toward', () => {
+    render(
+      <EventList
+        rows={[row({ status: 'queued' })]}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
 
-    expect(screen.getByText(/no events tracked yet/i)).toBeInTheDocument();
+    expect(screen.getByText('Queued')).toBeInTheDocument();
+  });
+
+  it('shows an empty state when the history has no rows', () => {
+    render(<EventList rows={[]} selectedId={null} onSelect={vi.fn()} />);
+
+    expect(screen.getByText(/no events match/i)).toBeInTheDocument();
   });
 });

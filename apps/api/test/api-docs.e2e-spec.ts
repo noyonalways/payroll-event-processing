@@ -159,11 +159,84 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
 
       for (const [path, method] of [
         ['/events', 'post'],
+        ['/events', 'get'],
         ['/events/{id}', 'get'],
       ] as const) {
         const op = doc.paths[path][method];
         expect(op.security).toEqual([{ bearer: [] }]);
         expect(op.responses['401']).toBeDefined();
+      }
+    });
+
+    it('documents GET /events with its query parameters and 400/401 responses', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      const list = doc.paths['/events'].get;
+      expect(list).toBeDefined();
+
+      // The listed query parameters are the DTO's deny-by-default surface.
+      const paramNames = list.parameters.map((p: { name: string }) => p.name);
+      for (const name of [
+        'status',
+        'eventType',
+        'employeeId',
+        'createdAfter',
+        'createdBefore',
+        'limit',
+        'cursor',
+      ]) {
+        expect(paramNames).toContain(name);
+      }
+      // The documented filter enums match the wire vocabulary.
+      const statusParam = list.parameters.find((p: { name: string }) => p.name === 'status');
+      expect(statusParam.schema.enum).toEqual([
+        'received',
+        'queued',
+        'processing',
+        'success',
+        'failed',
+      ]);
+      const limitParam = list.parameters.find((p: { name: string }) => p.name === 'limit');
+      expect(limitParam.schema.minimum).toBe(1);
+      expect(limitParam.schema.maximum).toBe(100);
+
+      // Typed 200 page + the documented failures.
+      expect(
+        list.responses['200'].content['application/json'].schema['$ref'],
+      ).toContain('EventListResponseDto');
+      expect(
+        list.responses['400'].content['application/json'].schema['$ref'],
+      ).toContain('ErrorResponseDto');
+      expect(
+        list.responses['401'].content['application/json'].schema['$ref'],
+      ).toContain('ErrorResponseDto');
+
+      // The page schema: data rows + nextCursor + limit, and the row carries no
+      // payload, result, or attempts (that is the single-event contract).
+      const pageSchema = doc.components.schemas['EventListResponseDto'];
+      expect(pageSchema).toBeDefined();
+      expect(pageSchema.properties.data.type).toBe('array');
+      expect(pageSchema.properties.data.items['$ref']).toContain('EventListItemDto');
+      expect(pageSchema.properties.nextCursor).toBeDefined();
+      expect(pageSchema.properties.nextCursor.nullable).toBe(true);
+      expect(pageSchema.properties.limit).toBeDefined();
+
+      const itemSchema = doc.components.schemas['EventListItemDto'];
+      expect(itemSchema).toBeDefined();
+      for (const key of [
+        'id',
+        'eventType',
+        'employeeId',
+        'sequence',
+        'status',
+        'createdAt',
+        'updatedAt',
+        'processedAt',
+      ]) {
+        expect(itemSchema.properties[key]).toBeDefined();
+      }
+      for (const absent of ['payload', 'result', 'attempts']) {
+        expect(itemSchema.properties[absent]).toBeUndefined();
       }
     });
 

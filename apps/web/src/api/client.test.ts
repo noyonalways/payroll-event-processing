@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSession, getSession, setSession } from '../lib/session';
-import { TRACKED_EVENTS_STORAGE_KEY } from '../lib/storage';
-import type { TrackedEvent } from '../lib/storage';
 import type { ErrorResponseBody } from '@repo/shared';
 import type { SessionResponse } from '../lib/types';
 import { login, logout } from './auth';
@@ -51,16 +49,6 @@ function sessionResponse(
     ...overrides,
   };
 }
-
-const trackedEvent: TrackedEvent = {
-  id: 'e-1',
-  eventType: 'BANK_ACCOUNT_CHANGE',
-  employeeId: 'emp-1',
-  lastStatus: 'queued',
-  attempts: 0,
-  submittedAt: '2026-08-26T00:00:00.000Z',
-  idempotencyKey: 'key-1',
-};
 
 function headersOf(init: RequestInit | undefined): Record<string, string> {
   return (init?.headers ?? {}) as Record<string, string>;
@@ -157,9 +145,8 @@ describe('request (authenticated client)', () => {
     expect(getSession()?.accessToken).toBe('access-2');
   });
 
-  it('clears the session and tracked events when the refresh is rejected', async () => {
+  it('clears the session when the refresh is rejected', async () => {
     setSession(sessionResponse());
-    localStorage.setItem(TRACKED_EVENTS_STORAGE_KEY, JSON.stringify([trackedEvent]));
     fetchMock.mockResolvedValueOnce(unauthorized()).mockResolvedValueOnce(unauthorized());
 
     await expect(request(`${API_BASE_URL}/events/e-1`)).rejects.toThrow(
@@ -167,8 +154,9 @@ describe('request (authenticated client)', () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(2); // the original request is not replayed
 
+    // The history needs no local cleanup — it is server-owned and re-scoped
+    // by whatever session signs in next.
     expect(getSession()).toBeNull();
-    expect(localStorage.getItem(TRACKED_EVENTS_STORAGE_KEY)).toBeNull();
   });
 
   it('keeps the session when the refresh cannot reach the API', async () => {

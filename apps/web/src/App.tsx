@@ -4,12 +4,12 @@ import { logout } from './api/auth';
 import { AuthView } from './components/AuthView';
 import { Button } from './components/ui/button';
 import { EventDetail } from './components/EventDetail';
+import { EventFilters } from './components/EventFilters';
 import { EventList } from './components/EventList';
 import { SubmitForm } from './components/SubmitForm';
 import { clearSession, setSession } from './lib/session';
 import type { StoredSession } from './lib/session';
-import { clearTrackedEvents } from './lib/storage';
-import { useEventTracker } from './lib/useEventTracker';
+import { useEventHistory } from './lib/useEventHistory';
 import { useSession } from './lib/useSession';
 
 /**
@@ -27,27 +27,30 @@ function App() {
 }
 
 /**
- * Two-pane demo UI: submit typed payroll events and watch them progress
- * `received → queued → processing → success | failed` through live polling in
- * the tracked list, with a detail panel showing the processing result and the
- * failure trail (retries, errorType, failedReason). Select a row to inspect it.
- * Requests go through the authenticated client, so the header names the
- * organization the session is acting in.
+ * Two-pane demo UI over the organization's history: submit typed payroll
+ * events and browse the SERVER-driven event history (`GET /events`) with
+ * combinable filters and load-more paging. Non-terminal rows keep polling
+ * `GET /events/{id}` so badges and attempt counts move without a manual
+ * refresh; the detail panel shows the processing result and the failure trail.
+ * There is no client-side list persistence — every view is what the server
+ * holds for the signed-in organization, so sign-out leaves nothing behind and
+ * reloads simply re-fetch. Requests go through the authenticated client, so
+ * the header names the organization the session is acting in.
  */
 function PayrollWorkspace({ session }: { session: StoredSession }) {
-  const { entries, recordSubmission, clearList } = useEventTracker();
+  const history = useEventHistory();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Derive the selection; when the selected event leaves the tracked list
-  // (e.g. "Clear list"), the detail panel falls back to the placeholder.
-  const selected = entries.find((entry) => entry.id === selectedId) ?? null;
+  // Derive the selection; when the selected row leaves the current view
+  // (filters changed, page re-fetched), the detail panel falls back to the
+  // placeholder.
+  const selected =
+    history.rows.find((row) => row.id === selectedId) ?? null;
 
   function handleSignOut() {
     // Revoke the refresh token server-side (logout is idempotent, always 204)
-    // and drop every piece of local state together. Clearing first returns the
-    // UI to sign-in immediately; the captured token still reaches the endpoint
-    // even though the store is already empty.
+    // and drop the session. The history itself is server-owned, so nothing
+    // else needs clearing — the next session fetches ITS organization only.
     const { refreshToken } = session;
-    clearTrackedEvents();
     clearSession();
     void logout(refreshToken).catch(() => {
       // Best effort — local sign-out already happened.
@@ -63,8 +66,8 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
               Payroll Events
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Submit typed payroll events and watch them progress through the
-              processing pipeline in real time.
+              Submit typed payroll events and browse the organization's
+              processing history as it moves through the pipeline in real time.
             </p>
           </div>
           <div className="flex flex-col items-end gap-2">
@@ -78,7 +81,7 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
               </span>
               <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                live polling · {entries.length} tracked
+                live polling · {history.rows.length} shown
               </span>
               <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
                 Sign out
@@ -95,28 +98,57 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
 
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-6">
-            <SubmitForm onSubmitted={recordSubmission} />
+            <SubmitForm onSubmitted={() => void history.refresh()} />
+
+            <EventFilters
+              filters={history.filters}
+              onChange={history.setFilter}
+              onClear={history.clearFilters}
+            />
 
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-lg font-semibold tracking-tight">
-                  Tracked events
+                  Event history
                 </h2>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearList}
-                  disabled={entries.length === 0}
-                >
-                  Clear list
-                </Button>
               </div>
-              <EventList
-                entries={entries}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
+              {history.loadError && (
+                <p
+                  role="alert"
+                  className="mb-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  {history.loadError}
+                </p>
+              )}
+              {history.loading ? (
+                <p
+                  className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
+                  data-testid="event-history-loading"
+                >
+                  Loading history…
+                </p>
+              ) : (
+                <EventList
+                  rows={history.rows}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                />
+              )}
+              {history.hasMore && !history.loading && (
+                <div className="mt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => void history.loadMore()}
+                    disabled={history.loadingMore}
+                    data-testid="load-more"
+                  >
+                    {history.loadingMore ? 'Loading…' : 'Load more'}
+                  </Button>
+                </div>
+              )}
             </div>
           </section>
 
@@ -128,8 +160,8 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
               <EventDetail entry={selected} />
             ) : (
               <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-                Select a tracked event to inspect its lifecycle, processing
-                result, and failure trail.
+                Select an event to inspect its lifecycle, processing result, and
+                failure trail.
               </p>
             )}
           </section>

@@ -46,8 +46,10 @@ HTTP request returns within milliseconds — it never blocks on processing work.
 
 Event submission → authenticate → validate → idempotency check → persist → enqueue → fast `201` response.
 A separate worker picks events off a queue, runs a *simulated* external payroll operation
-(which occasionally fails), and records the outcome. Clients track progress through a
-read-only status endpoint (or the demo UI, which polls it).
+(which occasionally fails), and records the outcome. Clients track progress through
+read-only endpoints — `GET /events` (the paginated, filterable history) and
+`GET /events/{id}` (full status + attempt trail) — or the demo UI, which pages the former
+and polls the latter.
 
 Every request is authenticated, and every row of payroll data belongs to one organization: the
 caller's organization comes from a signed access token, never from the request. See
@@ -78,6 +80,7 @@ Event lifecycle: `received → queued → processing → success | failed` (with
 | `POST /auth/logout` | public | Revoke the presented refresh token. Always `204`, even for an unknown or already-revoked token. |
 | `GET /auth/me` | `Authorization: Bearer <accessToken>` | The authenticated user, the organization their token is scoped to, and their role there. |
 | `POST /events` | `Authorization: Bearer <accessToken>` | Submit an event. Also requires the `Idempotency-Key` header. Returns `201` with the stored response (duplicates replay it). |
+| `GET /events` | `Authorization: Bearer <accessToken>` | Read-only paginated event history: one page of the organization's events, newest first (`created_at DESC, id DESC`) as `{ data, nextCursor, limit }`. Combinable filters — `status`, `eventType`, `employeeId`, `createdAfter`/`createdBefore` (inclusive) — AND together and compose with the keyset cursor: pass a page's `nextCursor` back as `cursor` to keep walking without page shifts. Rows carry no payload, result, or attempts (that is `GET /events/:id`). `400` for invalid filter values, an out-of-range `limit` (1–100), or an unparsable cursor. |
 | `GET /events/:id` | `Authorization: Bearer <accessToken>` | Read-only event status: committed lifecycle state, details, and the attempt history (one row per attempt). `404` for unknown ids **and for an event belonging to another organization** — the two are indistinguishable. |
 | `GET /health` | public | Service health: DB + Redis reachability, worker liveness heartbeats, BullMQ stalled-job count. Always `200`; the body carries `status: ok \| degraded`. |
 | `GET /api-docs` | public | Swagger UI (interactive). Raw spec at `/api-docs-json`. |
@@ -221,6 +224,7 @@ Tear everything down with `docker compose down` (add `-v` to also drop the `pgda
                 └──────────────────────┬───────────────────────┘
                                        │ POST /auth/* (session)
                                        │ POST /events (Bearer + Idempotency-Key)
+                                       │ GET /events (Bearer, paginated history)
                                        │ GET /events/:id · GET /health
                                        ▼
                 ┌──────────────────────────────────────────────┐
@@ -259,7 +263,7 @@ Tear everything down with `docker compose down` (add `-v` to also drop the `pgda
 | **Worker app** (`apps/worker/`) | Consumer entrypoint bootstrapping the worker composition root from `@repo/core`: claims a job, takes the DB row lock inside a single transaction, dispatches to the per-type handler, and commits the terminal state + audit row atomically — every statement scoped by the job's organization. |
 | **PostgreSQL / Prisma** (`packages/database/`) | Ground truth for identity, event state, idempotency, attempt history, and worker liveness. Unique constraints + the row lock make the guarantees hold even with multiple workers; tenant-qualified unique keys keep two organizations' data independent. |
 | **Simulated provider** (`packages/core/src/processing/`) | Fake external payroll call with env-tunable transient/permanent failure rates; deterministic `EMP-DEMO-*` scenarios for review demos. |
-| **Demo UI** (`apps/web/`) | React + Vite two-pane app: sign in (or register an organization), submit an event, watch it progress through live polling, inspect detail + failure trail. Imports the event-type contract and the error-body shape from `@repo/shared`. |
+| **Demo UI** (`apps/web/`) | React + Vite two-pane app: sign in (or register an organization), submit an event, browse the organization's server-driven history (`GET /events`: filters, load-more paging) with live status polling on in-flight rows, inspect detail + failure trail. Imports the event-type contract and the error-body shape from `@repo/shared`. |
 
 Interactive diagrams (ERD, event flow, lifecycle state machine, system architecture) are
 hosted on **Eraser**: <https://app.eraser.io/workspace/hIaUa8ZhdcDwT5YtdUiI>. Visual-only —
@@ -467,10 +471,18 @@ no submission is possible without a session. Registering creates a new organizat
 its `OWNER`; signing in returns the session for an organization you already belong to. The
 session is kept in `localStorage` (it survives a page reload), every request carries the access
 token, and a `401` triggers **one transparent refresh** with the stored refresh token before the
-request is replayed — if the refresh fails, the session and the tracked-event list are discarded
-and the UI returns to sign-in. The header shows the organization and role the session is acting
-in plus the signed-in email, and its **Sign out** button revokes the refresh token via
-`POST /auth/logout` before clearing local state. Tracked events never carry across sessions.
+request is replayed — if the refresh fails, the session is discarded and the UI returns to
+sign-in. The header shows the organization and role the session is acting in plus the
+signed-in email, and its **Sign out** button revokes the refresh token via `POST /auth/logout`
+before clearing local state — the history itself is server-owned, so a different organization
+signing in next simply fetches its own.
+
+The events view is **server-driven**: the list is the organization's history from `GET /events`
+(paginated, newest first) with combinable filters — lifecycle status, event type, employee id,
+and created-date bounds — and a **Load more** action following the cursor. Submitting an event
+re-fetches page one, so it appears without a reload; nothing is persisted in the browser, so a
+reload just re-fetches and a sign-out leaves nothing behind. Rows whose status is not terminal
+keep live-polling `GET /events/{id}` for badge and attempt-count updates.
 
 The UI has a **Demo scenario** select that pre-fills a reserved `EMP-DEMO-*` employee id to
 deterministically force each lifecycle outcome server-side — great for a reviewer:
@@ -493,9 +505,9 @@ Details: `packages/shared/src/demo-scenarios.ts` (the mapping) and `apps/web/REA
 
 | Suite | Command | Size | What it covers |
 |---|---|---|---|
-| Backend unit (Jest) | `pnpm test` | 187 tests, 19 suites | DTO validation, auth services + guard, idempotency service, queue producer, provider failure logic, the transactional claim, handlers, health. |
-| E2E (Jest + supertest, real Postgres + Redis) | `pnpm test:e2e` | 66 tests, 10 suites | Full flows: register → submit → idempotent replay, queue, processing, retry/exhaustion, crash recovery, `/health`, status API, and cross-organization isolation (`apps/api/test/tenant-isolation.e2e-spec.ts`). |
-| Frontend (Vitest) | `pnpm --filter @repo/web test:run` | 78 tests | Sign-in/registration, session persistence, submit-form behavior, scenario mapping, event-type contract. |
+| Backend unit (Jest) | `pnpm test` | 233 tests, 21 suites | DTO validation (including the list query parameters), auth services + guard, idempotency service, queue producer, provider failure logic, the transactional claim, handlers, health, and the events service reads (status + the tenant-scoped, cursor-paginated history query). |
+| E2E (Jest + supertest, real Postgres + Redis) | `pnpm test:e2e` | 83 tests, 11 suites | Full flows: register → submit → idempotent replay, queue, processing, retry/exhaustion, crash recovery, `/health`, status API, the event-history API (pagination walk, filter composition, cross-tenant blindness, pagination stability, malformed cursor/limit), and cross-organization isolation (`apps/api/test/tenant-isolation.e2e-spec.ts`). |
+| Frontend (Vitest) | `pnpm --filter @repo/web test:run` | 84 tests | Sign-in/registration, session persistence, submit-form behavior, scenario mapping, event-type contract, and the server-driven history hook (filter re-fetches, load-more cursor walks, row polling). |
 
 All three run from the workspace root as `turbo run` wrappers — `pnpm lint`, `pnpm typecheck`,
 `pnpm test`, `pnpm build`, `pnpm test:e2e` — dependency-ordered and cached (except `test:e2e`,
@@ -559,7 +571,10 @@ employee **within the organization**), `status` (`received | queued | processing
 failed`), `processed_at` and `result` (set only on success), `idempotency_key` (non-unique —
 traceability only; see D1). Constraints/indexes are tenant-leading:
 `UNIQUE (organization_id, employee_id, sequence)`, index on `(organization_id, status)`, index
-on `(organization_id, employee_id, created_at)`.
+on `(organization_id, status, created_at DESC, id DESC)` (serves the history pages: the
+equality prefix fixes a contiguous index range already in newest-first order, so pages read
+exactly the requested rows with no sort), and index on
+`(organization_id, employee_id, created_at)`.
 
 **`idempotency_records`** — the shared store-and-replay dedup layer: one row per `(organization,
 scope, key)` carrying the stored HTTP `response_status` + `response_body` and an `expires_at`
@@ -710,8 +725,9 @@ hand-maintained spec), available in every environment:
 - Swagger UI: http://localhost:3000/api-docs
 - Raw OpenAPI JSON: http://localhost:3000/api-docs-json
 
-The document annotates the protected operations (`POST /events`, `GET /events/:id`,
-`GET /auth/me`) with a `bearer` security requirement and documents their `401` responses, and it
+The document annotates the protected operations (`POST /events`, `GET /events`,
+`GET /events/:id`, `GET /auth/me`) with a `bearer` security requirement and documents their
+`401` responses (and the list endpoint's `400`), and it
 documents the `/auth/*` request bodies and the session schema. One caveat: the `bearer` scheme
 itself is not registered in the document (no `components.securitySchemes` entry in
 `setup-swagger.ts`), so Swagger UI shows no **Authorize** prompt — call protected endpoints from
