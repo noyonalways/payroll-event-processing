@@ -4,6 +4,7 @@ import * as Joi from 'joi';
 import { PrismaModule } from '@repo/database';
 import { QueueModule } from '@repo/database';
 import { resolveStageEnvFile } from '../config/env-file';
+import { PayrollEventQueueModule } from '../queue/payroll-event-queue.module';
 import { ProcessingModule } from '../processing/processing.module';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
@@ -49,6 +50,10 @@ import { PayrollEventProcessor } from './payroll-event.processor';
     }),
     PrismaModule,
     QueueModule,
+    // The producer (PayrollEventQueueService) — pre-move it came with the
+    // single QueueModule; task 3.4 split the connection into @repo/database
+    // and the producer into this module, so the worker must import it again.
+    PayrollEventQueueModule,
     ProcessingModule,
   ],
   providers: [PayrollEventProcessor, HeartbeatService],
