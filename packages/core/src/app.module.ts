@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule, QueueModule } from '@repo/database';
+import { resolveStageEnvFile } from './config/env-file';
 import { HealthModule } from './common/health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
@@ -11,10 +12,12 @@ import { EventsModule } from './events/events.module';
     // Global config with env var validation — fails fast on missing required vars
     ConfigModule.forRoot({
       isGlobal: true,
-      // `.env.development` / `.env.test` / `.env.production` hold host-local values.
-      // docker compose injects its own topology overrides for api/worker and does
-      // not rely on this file lookup (its env files are not copied into the image).
-      envFilePath: `.env.${process.env.NODE_ENV ?? 'development'}`,
+      // The stage file (`.env.<NODE_ENV>`) lives with the API app; it is
+      // resolved to an absolute path so the lookup is working-directory
+      // independent (design D7, amended). Docker compose does not rely on this
+      // file: its env file + `environment:` overrides inject the values as
+      // real environment variables, so a container without the file still starts.
+      envFilePath: resolveStageEnvFile(['DATABASE_URL', 'AUTH_JWT_SECRET']),
       validationSchema: Joi.object({
         NODE_ENV: Joi.string()
           .valid('development', 'production', 'test')

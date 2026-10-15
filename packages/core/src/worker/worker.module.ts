@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { PrismaModule } from '@repo/database';
 import { QueueModule } from '@repo/database';
+import { resolveStageEnvFile } from '../config/env-file';
 import { ProcessingModule } from '../processing/processing.module';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
@@ -11,6 +12,11 @@ import { PayrollEventProcessor } from './payroll-event.processor';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // Same stage file set as the API (apps/api/.env.<NODE_ENV>), resolved to
+      // an absolute path (design D7, amended). The worker validates its own
+      // narrower subset and needs no signing key, so only DATABASE_URL is
+      // required when no file is present (the injected-environment container path).
+      envFilePath: resolveStageEnvFile(['DATABASE_URL']),
       validationSchema: Joi.object({
         NODE_ENV: Joi.string()
           .valid('development', 'production', 'test')

@@ -9,6 +9,7 @@
  */
 export { AppModule } from './app.module';
 export { WorkerModule } from './worker/worker.module';
+export { resolveStageEnvFile } from './config/env-file';
 
 export { HttpExceptionFilter } from './common/filters/http-exception.filter';
 export { logLevelsFor } from './common/logger/log-levels';

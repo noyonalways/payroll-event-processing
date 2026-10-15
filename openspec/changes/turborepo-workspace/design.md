@@ -95,13 +95,15 @@ The reason is the TypeScript compiler's `rootDir` constraint, and it is a genuin
 
 The cost is a slower local loop when editing a package: an app's `nest start --watch` does not watch its dependencies, so a package edit needs its build re-run. `turbo watch build` covers exactly that.
 
-### D7 — Environment files stay at the workspace root and are resolved explicitly
+### D7 — Stage env files live with the API app and are resolved explicitly (amended)
 
 Turborepo executes a member's task with that member's directory as the working directory, so `envFilePath: '.env.development'` — which works today only because everything runs from the root — silently stops resolving once an app moves into `apps/`. Silent is the problem: `ConfigModule` does not error on a missing env file, so the app would start with unset configuration.
 
-A small resolver in `core` walks up to the workspace marker (`pnpm-workspace.yaml`) and returns `<root>/.env.<NODE_ENV>`. Every composition root uses it, so any invocation directory resolves to the same file, and the spec requires a loud failure when it is absent.
+As amended during the conversion, the real stage files (`.env.development` / `.env.test` / `.env.production`) move out of the workspace root and live with the API app: `apps/api/.env.<NODE_ENV>`. The root keeps only the committed template (`.env.example`), and the workspace-root `.env` — which exists only because the Prisma CLI auto-loads a plain `.env` and does not read `.env.<NODE_ENV>` — moves beside the schema it configures: `packages/database/.env`.
 
-**Alternatives:** per-app env files (better isolation, but duplicates the shared set across three members, changes the documented workflow, and breaks `env_file:` in compose); relying on the caller's working directory (the trap being fixed).
+A small resolver in `core` walks up from the working directory to the workspace marker (`pnpm-workspace.yaml`) and returns the absolute path `<root>/apps/api/.env.<NODE_ENV>`. Every composition root uses it, so any invocation directory — workspace root, the app's own directory, turbo — resolves the same file. The resolution fails loudly, naming the file it looked for, when the stage file is absent and the required variables were not injected another way: a container run whose configuration arrives as environment variables (compose `env_file:` references `apps/api/.env.development`, and its `environment:` keys re-point the topology at the compose network) proceeds without a file.
+
+**Alternatives:** keeping the stage files at the workspace root (rejected in amendment: root clutter from the single-package layout was the maintainer's complaint, and a root file invisible from an app's own directory is exactly the silent-miss trap); per-app env files (duplicates the set across members for no gain while only two entrypoints share it); relying on the caller's working directory (the trap being fixed).
 
 ### D8 — Shared config packages mirror the current options exactly
 
@@ -157,7 +159,7 @@ A mass file move cannot be reviewed or bisected on top of an uncommitted 94-file
 8. **`apps/api` and `apps/worker`** — entrypoints around the composition roots in `core`; verify each boots and that the worker drains an event the API accepted.
 9. **`apps/web`** — `git mv frontend/`; adopt `shared` for the event-type contract and the error shape, deleting the local duplicates; verify tests and build.
 10. **E2E** — `git mv test/ apps/api/test/`; verify all 10 suites.
-11. **Configuration** — the workspace-root env resolver; verify from both invocation directories and the loud-failure path.
+11. **Configuration** — the app-anchored stage-file resolver (`apps/api/.env.<NODE_ENV>`, D7 as amended); verify from both invocation directories, the loud-failure path, and the injected-environment container path.
 12. **Docker** — per-app Dockerfiles, retargeted compose contexts, entrypoint schema path; verify the full stack and the container smoke test.
 13. **CI** — pnpm setup, workspace commands, cached jobs, e2e filtered to `apps/api`.
 14. **Docs** — README and `docs/architecture.md`.

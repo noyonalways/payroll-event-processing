@@ -64,8 +64,8 @@
 
 ## 10. Configuration resolution
 
-- [ ] 10.1 Add the workspace-root environment resolver to `core` (walk up to the workspace marker, return `<root>/.env.<NODE_ENV>`, fail loudly when absent) and wire both composition roots to it — verify each app loads the root env file when launched from the root and from its own directory
-- [ ] 10.2 Verify a deliberately missing environment file produces a startup failure naming the file it looked for, rather than an app that starts with unset configuration
+- [ ] 10.1 Add the stage-file resolver to `core` (walk up to the workspace marker, return `<root>/apps/api/.env.<NODE_ENV>` as an absolute path — the stage files live with the API app, design D7 as amended — and fail loudly when absent and the required variables were not injected) and wire both composition roots to it — verify each app loads `apps/api/.env.<NODE_ENV>` when launched from the root and from its own directory
+- [ ] 10.2 Verify a deliberately missing stage file produces a startup failure naming the file it looked for, rather than an app that starts with unset configuration
 - [ ] 10.3 Verify the container path is unaffected: with configuration injected as environment variables and no env file present, both apps still start
 
 ## 11. Docker and compose
