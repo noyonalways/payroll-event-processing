@@ -37,3 +37,6 @@ prisma/*.db
 # Docker volumes
 data/
 pgdata/
+
+# Local ZCode session tooling (openspec agent targets)
+.zcode/
