@@ -98,20 +98,27 @@ export class EventClaim {
           return { outcome: 'skipped' } as const;
         }
 
-        // 4. Dispatch to the per-type handler. A transient failure re-throws,
-        //    aborting the transaction so the claim rolls back to `queued`.
+        // 4. Dispatch to the per-type handler. The LIVE transaction client
+        //    travels in so handlers persist domain state through the SAME
+        //    transaction (domain-effects design D2): a transient failure
+        //    re-throws, aborting the transaction so the claim AND any state
+        //    write roll back to `queued`, never a half-applied effect (R4/R5).
         //    Any other error is permanent: commit `processing → failed` +
         //    the FAILED attempt row atomically.
         let result: ProcessingResult;
         try {
-          result = await strategy.handle({
-            eventId,
-            eventType: eventType as EventType,
-            employeeId,
-            sequence,
-            payload: row.payload as Record<string, unknown>,
-            attempt,
-          });
+          result = await strategy.handle(
+            {
+              organizationId,
+              eventId,
+              eventType: eventType as EventType,
+              employeeId,
+              sequence,
+              payload: row.payload as Record<string, unknown>,
+              attempt,
+            },
+            tx,
+          );
         } catch (error) {
           if (error instanceof TransientPayrollFailureError) {
             throw error;

@@ -113,16 +113,22 @@ describe('EventClaim (transactional claim & process)', () => {
         select: { payload: true },
       });
 
-      // Handler dispatch with the identity + payload read in the tx.
+      // Handler dispatch with the identity + payload read in the tx, and the
+      // SAME transaction client the claim holds (domain-effects design D2) —
+      // a handler's state write travels through the claim's own transaction.
       const strategy = registry.resolve.mock.results[0].value;
-      expect(strategy.handle).toHaveBeenCalledWith({
-        eventId: 'evt-1',
-        eventType: EventType.BANK_ACCOUNT_CHANGE,
-        employeeId: 'emp-1',
-        sequence: 1,
-        payload: successResult.acknowledged,
-        attempt: 2,
-      });
+      expect(strategy.handle).toHaveBeenCalledWith(
+        {
+          organizationId: ORG,
+          eventId: 'evt-1',
+          eventType: EventType.BANK_ACCOUNT_CHANGE,
+          employeeId: 'emp-1',
+          sequence: 1,
+          payload: successResult.acknowledged,
+          attempt: 2,
+        },
+        tx,
+      );
 
       // Terminal write + attempt row, in-process (the tx commits them together).
       expect(tx.payrollEvent.updateMany).toHaveBeenNthCalledWith(2, {
@@ -149,6 +155,27 @@ describe('EventClaim (transactional claim & process)', () => {
         expect.any(Function),
         { timeout: 10_000, maxWait: 5_000 },
       );
+    });
+
+    it('hands the handler the claim’s own transaction client (R5)', async () => {
+      // The exact instance identity matters, not just the shape: the handler
+      // writes domain state through THIS client, so anything it writes lands
+      // inside the claim's transaction and aborts with it on throw.
+      await eventClaim.claimAndProcess(INPUT);
+
+      const strategy = registry.resolve.mock.results[0].value;
+      expect(strategy.handle).toHaveBeenCalledTimes(1);
+      const [, txArg] = strategy.handle.mock.calls[0];
+      expect(txArg).toBe(tx);
+
+      // Ordering guarantees the state write happens under the claim: the
+      // guarded claim (first updateMany) precedes dispatch, and the terminal
+      // write follows it inside the same transaction.
+      const claimOrder = tx.payrollEvent.updateMany.mock.invocationCallOrder[0];
+      const handleOrder = strategy.handle.mock.invocationCallOrder[0];
+      const terminalOrder = (tx.payrollEvent.updateMany.mock.invocationCallOrder as number[])[1];
+      expect(claimOrder).toBeLessThan(handleOrder);
+      expect(handleOrder).toBeLessThan(terminalOrder);
     });
   });
 

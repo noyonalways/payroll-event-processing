@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { FailureConfig, SimulatedPayrollProvider } from './simulated-payroll-provider';
 import { HandlerRegistry } from './handler-registry';
 import { EventClaim } from './event-claim';
+import { EmployeeDomainStateWriter } from './employee-domain-state.writer';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
@@ -23,6 +24,7 @@ import { DepartmentChangeHandler } from './handlers/department-change.handler';
     SimulatedPayrollProvider,
     HandlerRegistry,
     EventClaim,
+    EmployeeDomainStateWriter,
     BankAccountChangeHandler,
     AddressChangeHandler,
     SalaryChangeHandler,

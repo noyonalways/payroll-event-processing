@@ -1,4 +1,5 @@
 import { HandlerRegistry } from './handler-registry';
+import { EmployeeDomainStateWriter } from './employee-domain-state.writer';
 import { BankAccountChangeHandler } from './handlers/bank-account-change.handler';
 import { AddressChangeHandler } from './handlers/address-change.handler';
 import { DepartmentChangeHandler } from './handlers/department-change.handler';
@@ -10,11 +11,12 @@ describe('HandlerRegistry', () => {
   const provider = new SimulatedPayrollProvider(
     new FailureConfig(0, 0, 'always-success'),
   );
+  const writer = new EmployeeDomainStateWriter();
   const registry = new HandlerRegistry(
-    new BankAccountChangeHandler(provider),
-    new AddressChangeHandler(provider),
-    new SalaryChangeHandler(provider),
-    new DepartmentChangeHandler(provider),
+    new BankAccountChangeHandler(provider, writer),
+    new AddressChangeHandler(provider, writer),
+    new SalaryChangeHandler(provider, writer),
+    new DepartmentChangeHandler(provider, writer),
   );
 
   it('resolves a distinct handler for each supported event type', () => {

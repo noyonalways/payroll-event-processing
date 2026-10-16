@@ -3,9 +3,18 @@ import { EventType } from './event-type';
 /**
  * The context a worker hands to a processing handler. The handler sees the
  * event identity plus the validated `payload` row (per-type shape) and the
- * 1-based attempt number.
+ * 1-based attempt number. A plain string `organizationId` travels on PURPOSE —
+ * the shared package stays free of Prisma/database types; handlers that
+ * persist bounded state use it as the tenant discriminator (domain-effects
+ * design D2).
  */
 export interface HandlerInput {
+  /**
+   * Tenant the event belongs to, bound into every read/write the claim makes.
+   * Inherited authority: handlers never trust it from the payload — it arrives
+   * from the job data already validated against the event row's organization.
+   */
+  organizationId: string;
   eventId: string;
   eventType: EventType;
   employeeId: string;
