@@ -67,13 +67,14 @@ export type EventPayload =
   | SalaryChangePayload
   | DepartmentChangePayload;
 
-/** Lifecycle statuses reported by GET /events/{id}. */
+/** Lifecycle statuses reported by GET /events/{id} and the recovery actions. */
 export type LifecycleStatus =
   | 'received'
   | 'queued'
   | 'processing'
   | 'success'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 export type AttemptStatus = 'SUCCESS' | 'FAILED';
 export type AttemptErrorType = 'TEMPORARY' | 'PERMANENT';
@@ -88,6 +89,15 @@ export interface SubmitEventBody {
 export interface EventSubmissionResponse {
   id: string;
   status: 'received';
+}
+
+/** Body of POST /events/{id}/retry and POST /events/{id}/cancel: the row
+ * fields the UI needs to update a history row in place. */
+export interface EventActionResponse {
+  id: string;
+  status: LifecycleStatus;
+  eventType: EventType;
+  employeeId: string;
 }
 
 /** One processing attempt from the append-only `event_attempts` trail. */

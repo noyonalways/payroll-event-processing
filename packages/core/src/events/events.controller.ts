@@ -12,6 +12,7 @@ import {
   ApiBearerAuth,
   ApiBadRequestResponse,
   ApiBody,
+  ApiConflictResponse,
   ApiHeader,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -34,22 +35,27 @@ import {
   EVENT_LIFECYCLE_STATUSES,
 } from './dto/event-lifecycle';
 import { EVENT_EXAMPLES } from './dto/event-examples';
+import { EventActionResponseDto } from './dto/event-action-response.dto';
 import { EventSubmissionResponseDto } from './dto/event-submission-response.dto';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import { EventListResponseDto, EventsListQueryDto } from './dto/events-list.dto';
+import { EventRecoveryService } from './event-recovery.service';
 import { EventsService } from './events.service';
 
 /**
  * Payroll event endpoints. All routes are tenant-scoped: the organization comes
  * from the verified access token via `@CurrentActor()`, never from the request.
- * No route carries `@Public()`, so the global guard requires a token — there
- * is no way to reach another organization's payroll data.
+ * No route carries `@Public()`, so the global guard requires a token — there is
+ * no way to reach another organization's payroll data.
  */
 @ApiTags('events')
 @ApiBearerAuth()
 @Controller('events')
 export class EventsController {
-  constructor(private readonly eventsService: EventsService) {}
+  constructor(
+    private readonly eventsService: EventsService,
+    private readonly recoveryService: EventRecoveryService,
+  ) {}
 
   /**
    * POST /events — validate (per-type payload), dedupe by Idempotency-Key via the
@@ -191,6 +197,97 @@ export class EventsController {
   ): Promise<EventListResponseDto> {
     return this.eventsService.listEvents(actor.organizationId, query);
   }
+
+  /**
+   * POST /events/:id/retry — manual recovery (event-recovery): puts a terminal
+   * `failed` event back on its per-employee chain with a guarded
+   * `failed → queued` transition, then enqueues best-effort (Redis state can
+   * never fail the action — the relay recovers it, same as a submission). Any
+   * other state is a 409; another organization's event reads as 404, identical
+   * to an unknown id, and the acting user is recorded in the action audit.
+   */
+  @Post(':id/retry')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Retry a failed payroll event',
+    description:
+      'Moves a terminal `failed` event back to `queued` and schedules it for ' +
+      'processing again within the caller’s organization. 409 for any other ' +
+      'lifecycle state. No Idempotency-Key required.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Event identifier (UUID)',
+    example: 'f3c6df52-9d13-4d7b-a2d1-9f8d4c2c8a9b',
+  })
+  @ApiOkResponse({
+    description: 'Event re-queued for processing',
+    type: EventActionResponseDto,
+  })
+  @ApiConflictResponse({
+    description: 'The event exists but is not in `failed` status',
+    type: ErrorResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'No event with this id belongs to the caller’s organization',
+    type: ErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing, invalid, or expired access token',
+    type: ErrorResponseDto,
+  })
+  async retry(
+    @Param('id') id: string,
+    @CurrentActor() actor: AuthenticatedActor,
+  ): Promise<EventActionResponseDto> {
+    return this.recoveryService.retryEvent(actor.organizationId, id, actor.userId);
+  }
+
+  /**
+   * POST /events/:id/cancel — manual recovery (event-recovery): stops a pending
+   * (`received`/`queued`) event with a guarded transition to the terminal
+   * `cancelled` state. The worker's claim guard makes any job that later
+   * surfaces for a cancelled row a harmless no-op, so the queue is never
+   * touched here. Any other state is a 409; another organization's event reads
+   * as 404; the acting user is recorded in the action audit.
+   */
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Cancel a pending payroll event',
+    description:
+      'Moves a pending (`received` or `queued`) event to the terminal `cancelled` ' +
+      'status within the caller’s organization. 409 for any other lifecycle state. ' +
+      'No Idempotency-Key required.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Event identifier (UUID)',
+    example: 'f3c6df52-9d13-4d7b-a2d1-9f8d4c2c8a9b',
+  })
+  @ApiOkResponse({
+    description: 'Event cancelled',
+    type: EventActionResponseDto,
+  })
+  @ApiConflictResponse({
+    description: 'The event exists but is not in a pending (received/queued) status',
+    type: ErrorResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'No event with this id belongs to the caller’s organization',
+    type: ErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing, invalid, or expired access token',
+    type: ErrorResponseDto,
+  })
+  async cancel(
+    @Param('id') id: string,
+    @CurrentActor() actor: AuthenticatedActor,
+  ): Promise<EventActionResponseDto> {
+    return this.recoveryService.cancelEvent(actor.organizationId, id, actor.userId);
+  }
+
   /**
    * GET /events/:id — read-only event status (event-status-api), scoped to the
    * caller's organization. Returns the event's current committed lifecycle state,

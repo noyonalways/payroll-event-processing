@@ -79,8 +79,42 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
         'RefreshTokenDto',
         'SessionResponseDto',
         'ActorIdentityDto',
+        'EventActionResponseDto',
       ]) {
         expect(doc.components.schemas).toHaveProperty(schema);
+      }
+    });
+
+    it('exposes the cancelled lifecycle state in the status vocabularies', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      // The shared lifecycle constant backs the status field of both the
+      // single-event response and the list rows; CANCELLED (event-recovery)
+      // must extend every one of them together.
+      for (const schema of ['EventStatusResponseDto', 'EventListItemDto']) {
+        const statuses = JSON.stringify(doc.components.schemas[schema]);
+        expect(statuses).toContain('cancelled');
+      }
+    });
+
+    it('documents both recovery operations as bearer-secured with 200/404/409/401', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      for (const path of ['/events/{id}/retry', '/events/{id}/cancel']) {
+        const op = doc.paths[path]?.post;
+        // One assert with the whole operation: a missing or misannotated
+        // operation reads from the diff, which names the path for free.
+        expect(op).toMatchObject({
+          security: [{ bearer: [] }],
+          responses: expect.objectContaining({
+            '200': expect.objectContaining({
+              content: { 'application/json': { schema: { '$ref': expect.stringContaining('EventActionResponseDto') } } },
+            }),
+            '401': expect.anything(),
+            '404': expect.anything(),
+            '409': expect.anything(),
+          }),
+        });
       }
     });
 
@@ -195,6 +229,7 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
         'processing',
         'success',
         'failed',
+        'cancelled',
       ]);
       const limitParam = list.parameters.find((p: { name: string }) => p.name === 'limit');
       expect(limitParam.schema.minimum).toBe(1);

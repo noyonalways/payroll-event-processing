@@ -12,6 +12,15 @@ export interface PayrollEventJobInput {
   employeeId: string;
   /** JSON-safe sequence (Number(bigint)) — job data must be JSON-serializable. */
   sequence: number;
+  /**
+   * Attempts already recorded for this event before the round this job starts
+   * (event-recovery design D4). 0/undefined for a first-round submission; a
+   * relay passes the row's `attempt_base` so a manually retried event's fresh
+   * job numbers its attempts after the trail instead of over it. The worker
+   * adds this ONLY to its own round's counter — never to a job that is
+   * continuing its own retry backoff (whose data keeps its original base).
+   */
+  attemptBase?: number;
 }
 
 interface PayrollEventJobData extends PayrollEventJobInput {
@@ -95,9 +104,47 @@ export class PayrollEventQueueService implements OnModuleDestroy {
 
     this.logger.verbose(
       `Enqueued ${input.eventType} event ${input.eventId} for employee ` +
-        `${input.employeeId} in organization ${input.organizationId} (seq ${input.sequence})` +
+        `${input.employeeId} in organization ${input.organizationId} (seq ${input.sequence}` +
+        `, attemptBase ${input.attemptBase ?? 0})` +
         (job ? ` — job ${job.id}` : ' — suppressed (job already present)'),
     );
+  }
+
+  /**
+   * Best-effort enqueue with a wall-clock guard. If Redis is unreachable,
+   * ioredis's offline queue would otherwise hold the `add` — and thereby the
+   * caller's request — indefinitely, so the add is raced against a timeout and
+   * treated as a logged, recoverable failure. The event row is authoritative
+   * either way: a timed-out command may still land later, but the worker's
+   * claim guard (queued → processing) makes a duplicate job a harmless no-op,
+   * and the row stays awaited by the relay. Shared by the submission (201 never
+   * depends on Redis state) and the manual retry (recovery actions never fail
+   * on the queue) — R2's best-effort enqueue discipline.
+   */
+  async enqueueBestEffort(input: PayrollEventJobInput): Promise<void> {
+    try {
+      await Promise.race([this.enqueue(input), this.enqueueTimeout()]);
+    } catch (error) {
+      this.logger.error(
+        `Enqueue failed for event ${input.eventId} (${input.eventType}, employee ` +
+          `${input.employeeId}, organization ${input.organizationId}, seq ${input.sequence}): ` +
+          `${this.errorMessage(error)}`,
+      );
+    }
+  }
+
+  private enqueueTimeout(ms = 2000): Promise<never> {
+    return new Promise((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('timed out waiting for Redis')),
+        ms,
+      );
+      timer.unref();
+    });
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -22,7 +22,7 @@ describe('EventsService', () => {
     payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
     eventAttempt: { findMany: jest.fn() },
   };
-  const eventQueue = { enqueue: jest.fn() };
+  const eventQueue = { enqueueBestEffort: jest.fn() };
   const idempotency = { execute: jest.fn() };
 
   const input = (overrides: Partial<CreateEventInput> = {}): CreateEventInput => ({
@@ -71,8 +71,8 @@ describe('EventsService', () => {
     prisma.payrollEvent.findFirst.mockReset();
     prisma.payrollEvent.findMany.mockReset();
     prisma.eventAttempt.findMany.mockReset();
-    eventQueue.enqueue.mockReset();
-    eventQueue.enqueue.mockResolvedValue(undefined);
+    eventQueue.enqueueBestEffort.mockReset();
+    eventQueue.enqueueBestEffort.mockResolvedValue(undefined);
   });
 
   describe('new event submission', () => {
@@ -182,7 +182,7 @@ describe('EventsService', () => {
         where: { id: result.body.id, organizationId: ORG, status: 'RECEIVED' },
         data: { status: 'QUEUED' },
       });
-      expect(eventQueue.enqueue).toHaveBeenCalledWith({
+      expect(eventQueue.enqueueBestEffort).toHaveBeenCalledWith({
         eventId: result.body.id,
         organizationId: ORG,
         eventType: EventType.BANK_ACCOUNT_CHANGE,
@@ -193,7 +193,7 @@ describe('EventsService', () => {
 
     it('still returns 201 and persists when the queue is unreachable (enqueue rejects)', async () => {
       persistedNewEvent();
-      eventQueue.enqueue.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:6379'));
+      eventQueue.enqueueBestEffort.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:6379'));
 
       const result = await service.createEvent(ORG, input());
 
@@ -214,7 +214,7 @@ describe('EventsService', () => {
 
       await service.createEvent(ORG, input());
 
-      expect(eventQueue.enqueue).not.toHaveBeenCalled();
+      expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
       expect(tx.payrollEvent.create).not.toHaveBeenCalled();
     });
@@ -229,7 +229,7 @@ describe('EventsService', () => {
       const result = await service.createEvent(ORG, input());
 
       expect(result.body).toEqual({ id: 'evt-2', status: 'received' });
-      expect(eventQueue.enqueue).not.toHaveBeenCalled();
+      expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
     });
   });
@@ -362,6 +362,7 @@ describe('EventsService', () => {
       expect(roundTripped.attempts).toEqual([]);
     });
   });
+
   describe('listEvents (read-only, tenant-scoped, events-query-api)', () => {
     // Rows exactly as Prisma's findMany with the narrow select returns them.
     const historyRow = (overrides: Record<string, unknown> = {}) => ({
@@ -536,7 +537,7 @@ describe('EventsService', () => {
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.findFirst).not.toHaveBeenCalled();
       expect(prisma.eventAttempt.findMany).not.toHaveBeenCalled();
-      expect(eventQueue.enqueue).not.toHaveBeenCalled();
+      expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
       expect(idempotency.execute).not.toHaveBeenCalled();
     });
   });

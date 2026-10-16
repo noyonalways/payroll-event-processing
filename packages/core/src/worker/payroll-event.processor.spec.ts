@@ -55,7 +55,12 @@ describe('PayrollEventProcessor', () => {
   const eventClaim = { claimAndProcess: jest.fn() };
   const heartbeat = { touch: jest.fn() };
 
-  const job = (overrides: Record<string, unknown> = {}) =>
+  const job = (
+    overrides: Record<string, unknown> = {},
+    // Top-level attemptMade override (BullMQ's in-round counter — NOT part of
+    // job data), used by the manual-retry-round numbering tests.
+    attemptsMade?: number,
+  ) =>
     ({
       name: PAYROLL_EVENT_JOB,
       data: {
@@ -66,7 +71,7 @@ describe('PayrollEventProcessor', () => {
         sequence: 1,
         ...overrides,
       },
-      attemptsMade: 0,
+      attemptsMade: attemptsMade ?? 0,
       opts: { attempts: 5 },
     }) as never;
 
@@ -375,6 +380,124 @@ describe('PayrollEventProcessor', () => {
     }
   });
 
+  // ── Attempt numbering across manual retry rounds (event-recovery D4) ──────
+
+  describe('attempt numbering (round base carried in job data)', () => {
+    const transientError = new TransientPayrollFailureError('simulated down');
+
+    it('numbers a continuing backoff job from its own counter (base 0 → rows 1..N)', async () => {
+      // A job between its own retries keeps its ORIGINAL data (no base): its
+      // counter continues the round without double-counting a freshly written
+      // row base. Three attempts have already run → this is round attempt 4.
+      eventClaim.claimAndProcess.mockRejectedValue(transientError);
+
+      await expect(
+        processor.process(job({}, 3)),
+      ).rejects.toBeInstanceOf(TransientPayrollFailureError);
+
+      expect(eventClaim.claimAndProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ attempt: 4 }),
+      );
+      expect(prisma.eventAttempt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ attemptNumber: 4 }),
+      });
+    });
+
+    it('numbers a fresh retry-round job after the recorded trail (base 5 → attempt 6 onward)', async () => {
+      // Manual retry emitted a NEW job with attemptBase = MAX(attempt_number)
+      // of the previous rounds. attemptsMade is 0-based per BullMQ round
+      // (0 in-flight on the first run).
+      eventClaim.claimAndProcess.mockRejectedValue(transientError);
+
+      await expect(
+        processor.process(job({ attemptBase: 5 })),
+      ).rejects.toBeInstanceOf(TransientPayrollFailureError);
+
+      expect(eventClaim.claimAndProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ attempt: 6 }),
+      );
+      expect(prisma.eventAttempt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ attemptNumber: 6 }),
+      });
+
+      // The round's second attempt (BullMQ re-invokes process with the SAME
+      // job data): base 5 + attemptsMade 1 → 7. No collision with 1..5.
+      await expect(
+        processor.process(job({ attemptBase: 5 }, 1)),
+      ).rejects.toBeInstanceOf(TransientPayrollFailureError);
+      expect(prisma.eventAttempt.create).toHaveBeenLastCalledWith({
+        data: expect.objectContaining({ attemptNumber: 7 }),
+      });
+    });
+
+    it('upserts the exhausted-final attempt of a retry round at base + attemptsMade', async () => {
+      // Round 1 recorded 5 rows; the manual retry set attemptBase=5; the round-2
+      // job exhausted (attemptsMade 5). The final FAILED row is attempt 10 —
+      // contiguous with the trail, never colliding with round 1.
+      await processor.onFailed(
+        {
+          name: PAYROLL_EVENT_JOB,
+          data: {
+            eventId: 'evt-x',
+            organizationId: ORG,
+            employeeId: 'emp-x',
+            eventType: EventType.SALARY_CHANGE,
+            sequence: 3,
+            attemptBase: 5,
+          },
+          attemptsMade: 5,
+          opts: { attempts: 5 },
+        } as never,
+        transientError,
+      );
+
+      expect(prisma.eventAttempt.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { eventId_attemptNumber: { eventId: 'evt-x', attemptNumber: 10 } },
+          create: expect.objectContaining({ attemptNumber: 10 }),
+        }),
+      );
+      // The terminal failed write is unchanged and tenant-scoped.
+      expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
+        where: { id: 'evt-x', organizationId: ORG, status: EventStatus.QUEUED },
+        data: { status: EventStatus.FAILED },
+      });
+    });
+
+    it('treats a missing attemptBase exactly as 0 (all first-round behavior unchanged)', async () => {
+      eventClaim.claimAndProcess.mockResolvedValue({
+        outcome: 'success',
+        reference: 'SIM-test-ref',
+      });
+
+      await processor.process(job());
+
+      expect(eventClaim.claimAndProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ attempt: 1 }),
+      );
+      await processor.onFailed(
+        {
+          name: PAYROLL_EVENT_JOB,
+          data: {
+            eventId: 'evt-x',
+            organizationId: ORG,
+            employeeId: 'emp-x',
+            eventType: EventType.SALARY_CHANGE,
+            sequence: 3,
+          },
+          attemptsMade: 5,
+          opts: { attempts: 5 },
+        } as never,
+        transientError,
+      );
+      expect(prisma.eventAttempt.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { eventId_attemptNumber: { eventId: 'evt-x', attemptNumber: 5 } },
+        }),
+      );
+    });
+  });
+
   describe('FIFO relay (completion-driven)', () => {
     it('relays the next pending event in sequence order once the job completes', async () => {
       prisma.payrollEvent.findFirst.mockResolvedValue({
@@ -382,6 +505,7 @@ describe('PayrollEventProcessor', () => {
         eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
         sequence: 2n, // DB returns bigint for sequence
+        attemptBase: 0,
       });
 
       await processor.onCompleted(job());
@@ -399,6 +523,7 @@ describe('PayrollEventProcessor', () => {
           eventType: true,
           employeeId: true,
           sequence: true,
+          attemptBase: true,
         },
       });
       expect(queueService.enqueue).toHaveBeenCalledWith({
@@ -407,7 +532,27 @@ describe('PayrollEventProcessor', () => {
         eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
         sequence: 2, // Number(bigint) — JSON-safe job payload
+        attemptBase: 0,
       });
+    });
+
+    it('hands a retried event’s recorded trail length to the fresh job as attemptBase', async () => {
+      // event-recovery design D4: the relay discovers a manually retried row
+      // (attempt_base set by the retry transition) and passes it through, so
+      // the fresh job's round numbers AFTER the recorded trail.
+      prisma.payrollEvent.findFirst.mockResolvedValue({
+        id: 'evt-2',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 2n,
+        attemptBase: 5,
+      });
+
+      await processor.onCompleted(job());
+
+      expect(queueService.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: 'evt-2', attemptBase: 5 }),
+      );
     });
 
     it('skips terminal rows when selecting the next pending event', async () => {

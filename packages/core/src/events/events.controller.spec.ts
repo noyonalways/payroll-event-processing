@@ -1,10 +1,11 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { MembershipRole } from '@prisma/client';
 import { Response } from 'express';
 import { AuthenticatedActor } from '../auth/authenticated-actor';
 import { EventsController } from './events.controller';
 import { EventsService, SubmissionResult } from './events.service';
+import { EventRecoveryService } from './event-recovery.service';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import { EventType } from '@repo/shared';
 
@@ -17,6 +18,7 @@ const ACTOR: AuthenticatedActor = {
 describe('EventsController', () => {
   let controller: EventsController;
   const eventsService = { createEvent: jest.fn(), getEventStatus: jest.fn() };
+  const recoveryService = { retryEvent: jest.fn(), cancelEvent: jest.fn() };
   const res = { status: jest.fn().mockReturnThis() } as unknown as Response;
 
   beforeEach(async () => {
@@ -24,7 +26,10 @@ describe('EventsController', () => {
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       controllers: [EventsController],
-      providers: [{ provide: EventsService, useValue: eventsService }],
+      providers: [
+        { provide: EventsService, useValue: eventsService },
+        { provide: EventRecoveryService, useValue: recoveryService },
+      ],
     }).compile();
 
     controller = moduleRef.get<EventsController>(EventsController);
@@ -139,6 +144,51 @@ describe('EventsController', () => {
       eventsService.getEventStatus.mockRejectedValue(notFound);
 
       await expect(controller.getStatus('nope', ACTOR)).rejects.toBe(notFound);
+    });
+  });
+
+  describe('POST /events/:id/retry · /events/:id/cancel (tenant-scoped recovery)', () => {
+    it('retry delegates the organization, the path id, and the ACTING USER to the recovery service', async () => {
+      recoveryService.retryEvent.mockResolvedValue({
+        id: 'evt-1',
+        status: 'queued',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-1',
+      });
+
+      const result = await controller.retry('evt-1', ACTOR);
+
+      expect(recoveryService.retryEvent).toHaveBeenCalledWith('org-a', 'evt-1', 'user-1');
+      expect(result).toEqual({
+        id: 'evt-1',
+        status: 'queued',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-1',
+      });
+    });
+
+    it('cancel delegates the same tenant scoping and actor identity', async () => {
+      recoveryService.cancelEvent.mockResolvedValue({
+        id: 'evt-1',
+        status: 'cancelled',
+        eventType: EventType.ADDRESS_CHANGE,
+        employeeId: 'emp-1',
+      });
+
+      const result = await controller.cancel('evt-1', ACTOR);
+
+      expect(recoveryService.cancelEvent).toHaveBeenCalledWith('org-a', 'evt-1', 'user-1');
+      expect(result.status).toBe('cancelled');
+    });
+
+    it('propagates rejections — 404 and 409 shapes stay the global filter’s job', async () => {
+      const notFound = new NotFoundException('Event with id nope not found');
+      const conflict = new ConflictException('Event evt-1 is queued — only failed events can be retried');
+      recoveryService.retryEvent.mockRejectedValue(notFound);
+      await expect(controller.retry('nope', ACTOR)).rejects.toBe(notFound);
+
+      recoveryService.cancelEvent.mockRejectedValue(conflict);
+      await expect(controller.cancel('evt-1', ACTOR)).rejects.toBe(conflict);
     });
   });
 });

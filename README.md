@@ -68,7 +68,7 @@ caller's organization comes from a signed access token, never from the request. 
 > one line (`PayloadDtoRegistry`, `HandlerRegistry`). No schema migration (payload is JSONB), no
 > controller/service/worker changes.
 
-Event lifecycle: `received → queued → processing → success | failed` (with a per-attempt audit trail).
+Event lifecycle: `received → queued → processing → success | failed`, plus `cancelled` — a manual terminal state reachable only from the pending states through the recovery actions (with a per-attempt audit trail and an append-only action audit).
 
 ### API surface
 
@@ -82,6 +82,8 @@ Event lifecycle: `received → queued → processing → success | failed` (with
 | `POST /events` | `Authorization: Bearer <accessToken>` | Submit an event. Also requires the `Idempotency-Key` header. Returns `201` with the stored response (duplicates replay it). |
 | `GET /events` | `Authorization: Bearer <accessToken>` | Read-only paginated event history: one page of the organization's events, newest first (`created_at DESC, id DESC`) as `{ data, nextCursor, limit }`. Combinable filters — `status`, `eventType`, `employeeId`, `createdAfter`/`createdBefore` (inclusive) — AND together and compose with the keyset cursor: pass a page's `nextCursor` back as `cursor` to keep walking without page shifts. Rows carry no payload, result, or attempts (that is `GET /events/:id`). `400` for invalid filter values, an out-of-range `limit` (1–100), or an unparsable cursor. |
 | `GET /events/:id` | `Authorization: Bearer <accessToken>` | Read-only event status: committed lifecycle state, details, and the attempt history (one row per attempt). `404` for unknown ids **and for an event belonging to another organization** — the two are indistinguishable. |
+| `POST /events/:id/retry` | `Authorization: Bearer <accessToken>` | Manual recovery: move a terminal `failed` event back to `queued` and schedule it again on its employee's chain. Attempt numbering is continuous across retry rounds (the trail keeps one row per attempt). `409` for any other lifecycle state, `404` for unknown/foreign ids. The action is effective even when Redis is unreachable (the relay schedules it later). |
+| `POST /events/:id/cancel` | `Authorization: Bearer <accessToken>` | Manual recovery: cancel a pending (`received`/`queued`) event. `cancelled` is terminal — a job that later surfaces for it is a no-op, and the employee's chain keeps draining behind it. `409` for any other state, `404` for unknown/foreign ids. |
 | `GET /health` | public | Service health: DB + Redis reachability, worker liveness heartbeats, BullMQ stalled-job count. Always `200`; the body carries `status: ok \| degraded`. |
 | `GET /api-docs` | public | Swagger UI (interactive). Raw spec at `/api-docs-json`. |
 

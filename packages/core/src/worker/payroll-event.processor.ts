@@ -129,10 +129,13 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     // already exists (the last attempt's transient catch appended it outside
     // the aborted claim), so the upsert is idempotent there; the create-path
     // remains the backstop for infrastructure-exhausted events that recorded no
-    // transient rows. The attempt number is the FINAL one (BullMQ's
-    // `attemptsMade` is the 0-based count of attempts that ran = last attempt).
-    const { eventId, organizationId, employeeId, eventType, sequence } = job.data;
-    const finalAttempt = job.attemptsMade;
+    // transient rows. The attempt number is the FINAL one of THIS round: the
+    // job's own round base (event-recovery design D4 — job data, fixed at add
+    // time) plus BullMQ's `attemptsMade` (the count of attempts that ran = last
+    // attempt number).
+    const { eventId, organizationId, employeeId, eventType, sequence, attemptBase } =
+      job.data;
+    const finalAttempt = (attemptBase ?? 0) + job.attemptsMade;
     await this.prisma.$transaction([
       this.prisma.payrollEvent.updateMany({
         where: { id: eventId, organizationId, status: EventStatus.QUEUED },
@@ -159,8 +162,15 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
   }
 
   async process(job: Job<PayrollEventJobInput>): Promise<void> {
-    const { eventId, organizationId, employeeId, eventType, sequence } = job.data;
-    const attempt = (job.attemptsMade ?? 0) + 1;
+    const { eventId, organizationId, employeeId, eventType, sequence, attemptBase } =
+      job.data;
+    // The 1-based attempt number of THIS job's round: the round base carried in
+    // the job data (0 for a first-round submission; a manual retry's relay
+    // passes the recorded trail length — event-recovery design D4) plus
+    // BullMQ's in-round counter. A job that continues across its own backoff
+    // delays keeps its ORIGINAL data, so adding the base here never
+    // double-counts — the trail numbers contiguously across manual rounds.
+    const attempt = (attemptBase ?? 0) + (job.attemptsMade ?? 0) + 1;
 
     // 1. Ensure `queued` — a relayed job may still find the row `received`;
     //    this flips it to queued before the claim (no-op when the producer
@@ -307,6 +317,10 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
           eventType: true,
           employeeId: true,
           sequence: true,
+          // A manually retried event re-queued by this relay must hand its
+          // recorded trail length to the fresh job, so the new round numbers
+          // after the old one instead of colliding with it (event-recovery D4).
+          attemptBase: true,
         },
       });
 
@@ -325,6 +339,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
         eventType: next.eventType,
         employeeId: next.employeeId,
         sequence: Number(next.sequence),
+        attemptBase: next.attemptBase,
       });
     } catch (error) {
       // A failed relay must never fail the current job: the row stays

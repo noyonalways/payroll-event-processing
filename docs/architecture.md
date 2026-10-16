@@ -139,6 +139,13 @@ POST /events ─────►  received  ───────────► 
                                                                        ▼
                                                                     success
                         (transactional commit, attempt row + result written together)
+
+  POST /events/:id/retry ──── failed ─────► queued            (manual, guarded transition;
+                              │  trail continues: attempt_base = MAX(attempt_number),
+                              │  the fresh round numbers after the recorded trail)
+  POST /events/:id/cancel ─── received|queued ─► cancelled    (manual, terminal; any job that
+                              later surfaces for it is skipped by the guarded claim, and the
+                              employee's relay keeps draining the chain behind it)
 ```
 
 **Transitions:**
@@ -151,7 +158,9 @@ POST /events ─────►  received  ───────────► 
 | `processing` → `queued` | transient failure (retry) | **tx ABORT — no explicit reset write**: the re-throw rolls the claim back |
 | `processing` → `failed` | permanent failure | transaction commits `processing→failed` + FAILED(PERMANENT) attempt row together |
 | `queued` → `failed` | retries exhausted (transient) | `onFailed` array transaction commits `queued→failed` + upserts the final attempt's FAILED(TEMPORARY) row (already appended by the last transient failure) |
-| `failed` → (dead) | dead-letter | terminal, never reprocessed |
+| `received|queued` → `cancelled` | **manual recovery action** `POST /events/:id/cancel` | guarded transition + the `event_actions` audit row commit together; no processing attempt is recorded for the cancellation |
+| `failed` → `queued` | **manual recovery action** `POST /events/:id/retry` | guarded transition sets `attempt_base = MAX(attempt_number)` (numbering continues across rounds) + the audit row, in one transaction; re-enqueued best-effort like a submission |
+| `failed` / `cancelled` → (dead) | dead-letter view | terminal — surfaced by `GET /events?status=failed` and the UI dead-letter view, where the retry action lives |
 
 ## 5. Reliability design (the core of the assignment)
 
@@ -159,7 +168,7 @@ Each requirement mapped to its enforcement point.
 
 ### R1 — Temporary vs permanent failure
 - **Temporary** (provider down, timeout, 5xx): retried with exponential backoff; attempt `error_type=TEMPORARY`.
-- **Permanent** (business/validation error surfaced by provider): event → `failed`, `failedReason` recorded, **never retried** (dead-letter).
+- **Permanent** (business/validation error surfaced by provider): event → `failed`, `failedReason` recorded, **never automatically retried** (dead-letter); a human can still put it back to work through `POST /events/:id/retry` (numbering continues — the exactly-once terminal write is untouched).
 - Simulated via env-tunable probabilities so both paths are testable (`PAYROLL_TEMPORARY_FAILURE_RATE=0.25`, `PAYROLL_PERMANENT_FAILURE_RATE=0.05`).
 - **Enforced in:** BullMQ `attempts`/`backoff` config (set by the producer, `payroll-event-queue.service.ts`) + the worker's transient-error **re-throw** (`payroll-event.processor.ts`); `event_attempts.error_type`.
 

@@ -9,7 +9,7 @@ export type RowStatus = LifecycleStatus | 'unavailable';
 
 /** A lifecycle status is terminal once polling should stop. */
 export function isTerminal(status: LifecycleStatus): boolean {
-  return status === 'success' || status === 'failed';
+  return status === 'success' || status === 'failed' || status === 'cancelled';
 }
 
 export interface StatusBadgeStyle {
@@ -42,6 +42,11 @@ export const STATUS_BADGES: Record<RowStatus, StatusBadgeStyle> = {
   failed: {
     label: 'Failed',
     className: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200',
+  },
+  cancelled: {
+    label: 'Cancelled',
+    className:
+      'bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200',
   },
   unavailable: {
     label: 'Unavailable',

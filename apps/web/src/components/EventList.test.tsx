@@ -78,3 +78,97 @@ describe('EventList', () => {
     expect(screen.getByText(/no events match/i)).toBeInTheDocument();
   });
 });
+
+describe('EventList recovery actions (event-recovery)', () => {
+  const id = '12345678-1234-1234-1234-12345678abcd';
+
+  it('offers retry ONLY on failed rows and cancel ONLY on pending rows', () => {
+    render(
+      <EventList
+        rows={[
+          row({ id, status: 'failed', processedAt: null }),
+          row({ id: 'row-queued', employeeId: 'emp-2', status: 'queued' }),
+          row({ id: 'row-success', employeeId: 'emp-3', status: 'success' }),
+          row({ id: 'row-cancelled', employeeId: 'emp-4', status: 'cancelled' }),
+        ]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onRetry={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId(`retry-${id}`)).toBeInTheDocument();
+    expect(screen.getByTestId('cancel-row-queued')).toBeInTheDocument();
+    // Terminal rows carry no actions at all.
+    expect(screen.queryByTestId('retry-row-success')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cancel-row-success')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('retry-row-cancelled')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cancel-row-cancelled')).not.toBeInTheDocument();
+  });
+
+  it('offers no actions at all when the callbacks are absent (read-only list)', () => {
+    render(<EventList rows={[row({ id, status: 'failed' })]} selectedId={null} onSelect={vi.fn()} />);
+
+    expect(screen.queryByTestId('row-actions')).not.toBeInTheDocument();
+  });
+
+  it('invokes onRetry/onCancel with the full id, without selecting the row', () => {
+    const onRetry = vi.fn();
+    const onCancel = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <EventList
+        rows={[
+          row({ id, status: 'failed', processedAt: null }),
+          row({ id: 'row-queued', employeeId: 'emp-2', status: 'queued' }),
+        ]}
+        selectedId={null}
+        onSelect={onSelect}
+        onRetry={onRetry}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId(`retry-${id}`));
+    fireEvent.click(screen.getByTestId('cancel-row-queued'));
+
+    expect(onRetry).toHaveBeenCalledWith(id);
+    expect(onCancel).toHaveBeenCalledWith('row-queued');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('disables the acting row’s buttons while its action is in flight', () => {
+    render(
+      <EventList
+        rows={[
+          row({ id, status: 'failed', processedAt: null }),
+          row({ id: 'row-failed-2', employeeId: 'emp-2', status: 'failed', processedAt: null }),
+        ]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onRetry={vi.fn()}
+        onCancel={vi.fn()}
+        pendingAction={{ action: 'retry', eventId: id }}
+      />,
+    );
+
+    expect(screen.getByTestId(`retry-${id}`)).toBeDisabled();
+    // Only the acting row is disabled.
+    expect(screen.getByTestId('retry-row-failed-2')).toBeEnabled();
+  });
+
+  it('offers no action on a row whose poll failed (unavailable)', () => {
+    render(
+      <EventList
+        rows={[row({ id, status: 'failed', error: 'poll dropped' })]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onRetry={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('row-actions')).not.toBeInTheDocument();
+  });
+});

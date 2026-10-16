@@ -1,5 +1,6 @@
 import { API_BASE_URL, ApiError, JSON_HEADERS, NetworkError, SessionExpiredError, request } from './client';
 import type {
+  EventActionResponse,
   EventListQuery,
   EventListResponse,
   EventStatusResponse,
@@ -65,5 +66,30 @@ export function fetchEventStatus(id: string): Promise<EventStatusResponse> {
   return request<EventStatusResponse>(
     `${API_BASE_URL}/events/${encodeURIComponent(id)}`,
     { headers: JSON_HEADERS },
+  );
+}
+
+/**
+ * POST /events/{id}/retry — manual recovery of a terminal `failed` event
+ * (event-recovery): moves it back to `queued` and schedules it again. No
+ * Idempotency-Key: the guarded transition answers an already-applied action
+ * with a structured 409 instead of a stored-response replay.
+ */
+export function retryEvent(id: string): Promise<EventActionResponse> {
+  return request<EventActionResponse>(
+    `${API_BASE_URL}/events/${encodeURIComponent(id)}/retry`,
+    { method: 'POST', headers: JSON_HEADERS },
+  );
+}
+
+/**
+ * POST /events/{id}/cancel — manual recovery of a pending event: a guarded
+ * transition to the terminal `cancelled` state. Same no-Idempotency-Key
+ * contract as the retry action.
+ */
+export function cancelEvent(id: string): Promise<EventActionResponse> {
+  return request<EventActionResponse>(
+    `${API_BASE_URL}/events/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST', headers: JSON_HEADERS },
   );
 }

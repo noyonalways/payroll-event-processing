@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { logout } from './api/auth';
 import { AuthView } from './components/AuthView';
 import { Button } from './components/ui/button';
+import { DeadLetterView } from './components/DeadLetterView';
 import { EventDetail } from './components/EventDetail';
 import { EventFilters } from './components/EventFilters';
 import { EventList } from './components/EventList';
@@ -10,6 +11,7 @@ import { SubmitForm } from './components/SubmitForm';
 import { clearSession, setSession } from './lib/session';
 import type { StoredSession } from './lib/session';
 import { useEventHistory } from './lib/useEventHistory';
+import { useRecovery } from './lib/useRecovery';
 import { useSession } from './lib/useSession';
 
 /**
@@ -36,15 +38,21 @@ function App() {
  * holds for the signed-in organization, so sign-out leaves nothing behind and
  * reloads simply re-fetch. Requests go through the authenticated client, so
  * the header names the organization the session is acting in.
+ *
+ * The recovery actions (event-recovery) live on the history rows — retry on
+ * `failed`, cancel on pending — and a dedicated dead-letter view (a failed-only
+ * selection of the same history contract) collects what needs attention.
  */
 function PayrollWorkspace({ session }: { session: StoredSession }) {
   const history = useEventHistory();
+  const [view, setView] = useState<'history' | 'dead-letter'>('history');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Derive the selection; when the selected row leaves the current view
   // (filters changed, page re-fetched), the detail panel falls back to the
   // placeholder.
   const selected =
     history.rows.find((row) => row.id === selectedId) ?? null;
+  const recovery = useRecovery({ onSettled: () => history.refresh() });
 
   function handleSignOut() {
     // Revoke the refresh token server-side (logout is idempotent, always 204)
@@ -96,76 +104,134 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <section className="space-y-6">
-            <SubmitForm onSubmitted={() => void history.refresh()} />
-
-            <EventFilters
-              filters={history.filters}
-              onChange={history.setFilter}
-              onClear={history.clearFilters}
-            />
-
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-lg font-semibold tracking-tight">
-                  Event history
-                </h2>
-              </div>
-              {history.loadError && (
-                <p
-                  role="alert"
-                  className="mb-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                >
-                  {history.loadError}
-                </p>
-              )}
-              {history.loading ? (
-                <p
-                  className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
-                  data-testid="event-history-loading"
-                >
-                  Loading history…
-                </p>
-              ) : (
-                <EventList
-                  rows={history.rows}
-                  selectedId={selectedId}
-                  onSelect={setSelectedId}
-                />
-              )}
-              {history.hasMore && !history.loading && (
-                <div className="mt-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => void history.loadMore()}
-                    disabled={history.loadingMore}
-                    data-testid="load-more"
-                  >
-                    {history.loadingMore ? 'Loading…' : 'Load more'}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-2 text-lg font-semibold tracking-tight">
-              Event detail
-            </h2>
-            {selected ? (
-              <EventDetail entry={selected} />
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-                Select an event to inspect its lifecycle, processing result, and
-                failure trail.
-              </p>
-            )}
-          </section>
+        <div
+          role="tablist"
+          aria-label="Views"
+          className="mb-5 flex gap-2"
+          data-testid="view-switch"
+        >
+          <Button
+            type="button"
+            variant={view === 'history' ? 'default' : 'outline'}
+            size="sm"
+            role="tab"
+            aria-selected={view === 'history'}
+            onClick={() => setView('history')}
+            data-testid="view-history"
+          >
+            Submit & history
+          </Button>
+          <Button
+            type="button"
+            variant={view === 'dead-letter' ? 'default' : 'outline'}
+            size="sm"
+            role="tab"
+            aria-selected={view === 'dead-letter'}
+            onClick={() => setView('dead-letter')}
+            data-testid="view-dead-letter"
+          >
+            Dead letters
+          </Button>
         </div>
+
+        {view === 'dead-letter' ? (
+          <DeadLetterView />
+        ) : (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <section className="space-y-6">
+              <SubmitForm onSubmitted={() => void history.refresh()} />
+
+              <EventFilters
+                filters={history.filters}
+                onChange={history.setFilter}
+                onClear={history.clearFilters}
+              />
+
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-lg font-semibold tracking-tight">
+                    Event history
+                  </h2>
+                </div>
+                {recovery.error && (
+                  <div
+                    className="mb-2 flex items-start justify-between gap-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                    role="alert"
+                    data-testid="history-action-error"
+                  >
+                    <span>
+                      {recovery.error.action === 'retry' ? 'Retry' : 'Cancel'}{' '}
+                      failed: {recovery.error.message}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={recovery.clearError}
+                    >
+                      dismiss
+                    </Button>
+                  </div>
+                )}
+                {history.loadError && (
+                  <p
+                    role="alert"
+                    className="mb-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  >
+                    {history.loadError}
+                  </p>
+                )}
+                {history.loading ? (
+                  <p
+                    className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
+                    data-testid="event-history-loading"
+                  >
+                    Loading history…
+                  </p>
+                ) : (
+                  <EventList
+                    rows={history.rows}
+                    selectedId={selectedId}
+                    onSelect={setSelectedId}
+                    onRetry={recovery.retry}
+                    onCancel={recovery.cancel}
+                    pendingAction={recovery.pendingAction}
+                  />
+                )}
+                {history.hasMore && !history.loading && (
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => void history.loadMore()}
+                      disabled={history.loadingMore}
+                      data-testid="load-more"
+                    >
+                      {history.loadingMore ? 'Loading…' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h2 className="mb-2 text-lg font-semibold tracking-tight">
+                Event detail
+              </h2>
+              {selected ? (
+                <EventDetail entry={selected} />
+              ) : (
+                <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
+                  Select an event to inspect its lifecycle, processing result, and
+                  failure trail.
+                </p>
+              )}
+            </section>
+          </div>
+        )}
       </div>
     </main>
   );

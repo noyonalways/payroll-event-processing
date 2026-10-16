@@ -177,6 +177,86 @@ describe('PayrollEventQueueService', () => {
       expect(data.sequence).toBe(1);
       expect(typeof data.sequence).toBe('number');
     });
+
+    it('carries attemptBase in the job data when the caller passes one', async () => {
+      // event-recovery design D4: the relay passes a retried event's
+      // attempt_base so the fresh job numbers its round AFTER the recorded
+      // trail; a first-round submission omits it.
+      queue.add.mockResolvedValue({ id: 'org-a|emp-3' });
+
+      await service.enqueue({
+        eventId: 'evt-3',
+        organizationId: ORG,
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-3',
+        sequence: 4,
+        attemptBase: 5,
+      });
+
+      const data = queue.add.mock.calls[0][1] as Record<string, unknown>;
+      expect(data.attemptBase).toBe(5);
+    });
+
+    it('leaves attemptBase undefined (first round) when the caller omits it', async () => {
+      queue.add.mockResolvedValue({ id: 'org-a|emp-4' });
+
+      await service.enqueue({
+        eventId: 'evt-4',
+        organizationId: ORG,
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-4',
+        sequence: 1,
+      });
+
+      const data = queue.add.mock.calls[0][1] as Record<string, unknown>;
+      expect(data.attemptBase).toBeUndefined();
+    });
+  });
+
+  describe('enqueueBestEffort (wall-clock-guarded enqueue)', () => {
+    const input = {
+      eventId: 'evt-5',
+      organizationId: ORG,
+      eventType: EventType.SALARY_CHANGE,
+      employeeId: 'emp-5',
+      sequence: 1,
+    } as const;
+
+    it('delegates to enqueue and resolves when Redis answers in time', async () => {
+      queue.add.mockResolvedValue({ id: 'org-a|emp-5' });
+
+      await expect(service.enqueueBestEffort({ ...input })).resolves.toBeUndefined();
+      expect(queue.add).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves — never throws — when the add collides with an existing job', async () => {
+      // A suppressed add (job already present for the employee) is the normal
+      // FIFO path, not an error.
+      queue.add.mockResolvedValue(undefined);
+
+      await expect(service.enqueueBestEffort({ ...input })).resolves.toBeUndefined();
+    });
+
+    it('swallows and logs an add rejection instead of failing the caller', async () => {
+      queue.add.mockRejectedValueOnce(new Error('Connection is closed.'));
+
+      await expect(service.enqueueBestEffort({ ...input })).resolves.toBeUndefined();
+    });
+
+    it('resolves after the wall-clock guard when Redis holds the add (offline queue)', async () => {
+      jest.useFakeTimers();
+      try {
+        // Redis unreachable: ioredis's offline queue holds the add forever.
+        queue.add.mockReturnValue(new Promise(() => undefined));
+
+        const pending = service.enqueueBestEffort({ ...input });
+        const assertion = expect(pending).resolves.toBeUndefined();
+        await jest.advanceTimersByTimeAsync(2_000);
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('perEmployeeJobId', () => {

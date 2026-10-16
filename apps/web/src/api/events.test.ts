@@ -5,7 +5,9 @@ import {
   API_BASE_URL,
   ApiError,
   NetworkError,
+  cancelEvent,
   fetchEventStatus,
+  retryEvent,
   submitEvent,
 } from './events';
 
@@ -151,5 +153,62 @@ describe('fetchEventStatus', () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
 
     await expect(fetchEventStatus('e-1')).rejects.toBeInstanceOf(NetworkError);
+  });
+});
+describe('retryEvent', () => {
+  it('POSTs to /events/{id}/retry with the token and NO Idempotency-Key header', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { id: 'e-1', status: 'queued', eventType: 'SALARY_CHANGE', employeeId: 'emp-1' },
+      ),
+    );
+
+    const result = await retryEvent('e-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${API_BASE_URL}/events/e-1/retry`);
+    expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(init.headers).not.toHaveProperty('Idempotency-Key');
+    expect(result.status).toBe('queued');
+  });
+
+  it('surfaces a 409 guard rejection as an ApiError with its statusCode', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        {
+          statusCode: 409,
+          message: 'Event e-2 is queued — only failed events can be retried',
+          error: 'ConflictException',
+          timestamp: '2026-10-16T00:00:00.000Z',
+          path: '/events/e-2/retry',
+        },
+        409,
+      ),
+    );
+
+    await expect(retryEvent('e-2')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Event e-2 is queued — only failed events can be retried',
+    } as Partial<ApiError>);
+  });
+});
+
+describe('cancelEvent', () => {
+  it('POSTs to /events/{id}/cancel with the token and NO Idempotency-Key header', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { id: 'e-3', status: 'cancelled', eventType: 'SALARY_CHANGE', employeeId: 'emp-3' },
+      ),
+    );
+
+    const result = await cancelEvent('e-3');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${API_BASE_URL}/events/e-3/cancel`);
+    expect(init.method).toBe('POST');
+    expect(init.headers).not.toHaveProperty('Idempotency-Key');
+    expect(result.status).toBe('cancelled');
   });
 });

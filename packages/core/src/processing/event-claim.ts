@@ -21,7 +21,10 @@ export interface EventClaimInput {
   employeeId: string;
   /** JSON-safe sequence (Number(bigint)) — same convention as queue job data. */
   sequence: number;
-  /** 1-based processing attempt number (job.attemptsMade + 1). */
+  /** 1-based processing attempt number — the round base carried in the job
+   *  data (event-recovery design D4) plus BullMQ's in-round counter. The claim
+   *  never derives numbering itself; it records audit rows under the number it
+   *  is given. */
   attempt: number;
 }
 

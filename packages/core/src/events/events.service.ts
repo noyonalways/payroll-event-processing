@@ -175,13 +175,22 @@ export class EventsService {
       // Background the queue so the 201 never depends on Redis state. The row is
       // marked `queued` first (always recoverable), then enqueued best-effort.
       await this.markQueued(organizationId, submitted.eventId, employeeId);
-      await this.enqueueBestEffort({
-        id: submitted.eventId,
-        organizationId,
-        eventType: input.eventType,
-        employeeId,
-        sequence: submitted.sequence,
-      });
+      try {
+        // The queue's helper swallows and logs internally (R2); this catch is
+        // the belt-and-braces that keeps ANY queue-side behavior from failing
+        // the 201 — the row is `queued` and the relay recovers it either way.
+        await this.eventQueue.enqueueBestEffort({
+          eventId: submitted.eventId,
+          organizationId,
+          eventType: input.eventType,
+          employeeId,
+          sequence: Number(submitted.sequence),
+        });
+      } catch (error) {
+        this.logger.error(
+          `Post-commit enqueue failed for event ${submitted.eventId} (${input.eventType}, employee ${employeeId}, organization ${organizationId}): ${this.errorMessage(error)}`,
+        );
+      }
     }
 
     return { httpStatus: submitted.status, body: submitted.body };
@@ -416,49 +425,6 @@ export class EventsService {
         `Failed to mark event ${id} queued for employee ${employeeId}: ${this.errorMessage(error)}`,
       );
     }
-  }
-
-  /**
-   * Best-effort enqueue with a wall-clock guard. If Redis is unreachable,
-   * ioredis's offline queue would otherwise hold the `add` — and thereby the
-   * HTTP response — indefinitely, so the add is raced against a timeout and
-   * treated as a logged, recoverable failure. The event row is authoritative
-   * either way: a timed-out command may still land later, but the worker's
-   * claim guard (queued → processing) makes a duplicate job a harmless no-op.
-   */
-  private async enqueueBestEffort(input: {
-    id: string;
-    organizationId: string;
-    eventType: EventType;
-    employeeId: string;
-    sequence: bigint;
-  }): Promise<void> {
-    try {
-      await Promise.race([
-        this.eventQueue.enqueue({
-          eventId: input.id,
-          organizationId: input.organizationId,
-          eventType: input.eventType,
-          employeeId: input.employeeId,
-          sequence: Number(input.sequence),
-        }),
-        this.enqueueTimeout(),
-      ]);
-    } catch (error) {
-      this.logger.error(
-        `Enqueue failed for event ${input.id} (${input.eventType}, employee ${input.employeeId}, organization ${input.organizationId}, seq ${input.sequence}): ${this.errorMessage(error)}`,
-      );
-    }
-  }
-
-  private enqueueTimeout(ms = 2000): Promise<never> {
-    return new Promise((_, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('timed out waiting for Redis')),
-        ms,
-      );
-      timer.unref();
-    });
   }
 
   private errorMessage(error: unknown): string {

@@ -1,12 +1,19 @@
 import { truncateId } from '../lib/format';
 import type { HistoryRow } from '../lib/useEventHistory';
 import type { RowStatus } from '../lib/status';
+import { Button } from './ui/button';
 import { StatusBadge } from './StatusBadge';
 
 export interface EventListProps {
   rows: HistoryRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Offer a retry action on `failed` rows (event-recovery); absent = read-only list. */
+  onRetry?: (id: string) => void;
+  /** Offer a cancel action on pending rows (event-recovery); absent = read-only list. */
+  onCancel?: (id: string) => void;
+  /** The action in flight; its row's actions render disabled until it settles. */
+  pendingAction?: { action: 'retry' | 'cancel'; eventId: string } | null;
 }
 
 function attemptsLabel(attempts: number): string {
@@ -17,8 +24,21 @@ function attemptsLabel(attempts: number): string {
  * Rows for one page-worth of the organization's server-side history. A row
  * whose last poll failed renders the `unavailable` badge. Clicking a row
  * selects it for the detail panel.
+ *
+ * With `onRetry`/`onCancel` the list also carries the recovery actions: retry
+ * only on `failed` rows, cancel only on pending (`queued`/`received`) rows —
+ * terminal rows (`success`, `cancelled`) get none, and an in-flight action
+ * disables its own row's buttons. The row itself stays the selection target:
+ * the action buttons stop propagation so acting never selects.
  */
-export function EventList({ rows, selectedId, onSelect }: EventListProps) {
+export function EventList({
+  rows,
+  selectedId,
+  onSelect,
+  onRetry,
+  onCancel,
+  pendingAction = null,
+}: EventListProps) {
   if (rows.length === 0) {
     return (
       <p
@@ -37,11 +57,24 @@ export function EventList({ rows, selectedId, onSelect }: EventListProps) {
       {rows.map((row) => {
         const status: RowStatus = row.error ? 'unavailable' : row.status;
         const isSelected = row.id === selectedId;
+        const busy = pendingAction?.eventId === row.id;
+        const offerRetry = onRetry !== undefined && row.status === 'failed' && !row.error;
+        const offerCancel =
+          onCancel !== undefined &&
+          (row.status === 'queued' || row.status === 'received') &&
+          !row.error;
         return (
           <li key={row.id}>
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => onSelect(row.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect(row.id);
+                }
+              }}
               aria-pressed={isSelected}
               className={`flex w-full items-center gap-3 rounded-xl border bg-card px-3 py-2 text-left text-sm shadow-sm transition-colors ${
                 isSelected
@@ -58,10 +91,46 @@ export function EventList({ rows, selectedId, onSelect }: EventListProps) {
                 seq {row.sequence}
               </span>
               <StatusBadge status={status} />
-              <span className="ml-auto text-xs text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {attemptsLabel(row.attempts)}
               </span>
-            </button>
+              {(offerRetry || offerCancel) && (
+                <span className="ml-auto flex shrink-0 gap-1.5" data-testid="row-actions">
+                  {offerRetry && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRetry(row.id);
+                      }}
+                      data-testid={`retry-${row.id}`}
+                    >
+                      {busy && pendingAction?.action === 'retry' ? '…' : 'Retry'}
+                    </Button>
+                  )}
+                  {offerCancel && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancel(row.id);
+                      }}
+                      data-testid={`cancel-${row.id}`}
+                    >
+                      {busy && pendingAction?.action === 'cancel' ? '…' : 'Cancel'}
+                    </Button>
+                  )}
+                </span>
+              )}
+            </div>
           </li>
         );
       })}

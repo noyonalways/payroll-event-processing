@@ -69,8 +69,8 @@ and housekeeping. Each becomes one OpenSpec change via `/opsx:propose` -> `/opsx
 
 | # | Change Name (kebab-case) | Summary | Status |
 |---|---|---|---|
-| 1 | `events-list-api` | `GET /events` with cursor pagination + filters (status, event type, employee, date range) and a server-driven Events page in the UI; the first way to browse event history | Queued |
-| 2 | `event-recovery-actions` | Retry a failed event, cancel a queued one, dead-letter view; manual actions recorded in `event_attempts`/audit | Queued |
+| 1 | `events-list-api` | `GET /events` with cursor pagination + filters (status, event type, employee, date range) and a server-driven Events page in the UI; the first way to browse event history | ✅ Done |
+| 2 | `event-recovery-actions` | Retry a failed event, cancel a queued one, dead-letter view; manual actions recorded in `event_attempts`/audit | ✅ Done |
 | 3 | `employee-directory` | Org-scoped `employees` table + CRUD; `employeeId` validated against it (no more free-form strings) | Queued |
 | 4 | `domain-effects` | Handlers write real effective-dated state (compensation, bank account, address, department) inside the claim transaction — events gain a business effect | Queued |
 | 5 | `realtime-status` | SSE stream replacing UI polling for lifecycle status | Queued |

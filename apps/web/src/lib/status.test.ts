@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { isTerminal, statusBadge, STATUS_BADGES } from './status';
 
 describe('isTerminal', () => {
+  it('treats cancelled as terminal (recovery ends the lifecycle)', () => {
+    expect(isTerminal('cancelled')).toBe(true);
+  });
+
   it('treats success and failed as terminal', () => {
     expect(isTerminal('success')).toBe(true);
     expect(isTerminal('failed')).toBe(true);
@@ -30,6 +34,7 @@ describe('statusBadge', () => {
         'processing',
         'success',
         'failed',
+        'cancelled',
         'unavailable',
       ].sort(),
     );

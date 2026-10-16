@@ -97,6 +97,15 @@ function toQuery(filters: HistoryFilters, cursor: string | null): EventListQuery
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : 'Request failed';
 
+export interface UseEventHistoryOptions {
+  /**
+   * Pins the `status` filter for the hook's whole life (the dead-letter view):
+   * the initial selection and every re-fetch always carry it, and `setFilter`
+   * ignores status changes instead of lifting the pin.
+   */
+  lockedStatus?: LifecycleStatus;
+}
+
 /**
  * The server-driven event history (frontend-app, events-query-api): rows come
  * from `GET /events` through the authenticated client, never from local
@@ -110,8 +119,11 @@ const errorMessage = (error: unknown): string =>
  * failing poll marks only its own row unavailable, and polling stops for a row
  * once a terminal state has been observed.
  */
-export function useEventHistory() {
-  const [filters, setFilters] = useState<HistoryFilters>(EMPTY_FILTERS);
+export function useEventHistory(options: UseEventHistoryOptions = {}) {
+  const lockedStatus = options.lockedStatus;
+  const [filters, setFilters] = useState<HistoryFilters>(
+    lockedStatus ? { ...EMPTY_FILTERS, status: lockedStatus } : EMPTY_FILTERS,
+  );
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -166,16 +178,22 @@ export function useEventHistory() {
   /** Change one filter; the page-one effect does the re-fetch. */
   const setFilter = useCallback(
     <K extends keyof HistoryFilters>(key: K, value: HistoryFilters[K]) => {
+      if (key === 'status' && lockedStatus !== undefined && value !== lockedStatus) {
+        // The status pin (dead-letter view) is not user-liftable.
+        return;
+      }
       setFilters((prev) =>
         prev[key] === value ? prev : { ...prev, [key]: value },
       );
     },
-    [],
+    [lockedStatus],
   );
 
   const clearFilters = useCallback(() => {
-    setFilters(EMPTY_FILTERS);
-  }, []);
+    setFilters(
+      lockedStatus ? { ...EMPTY_FILTERS, status: lockedStatus } : EMPTY_FILTERS,
+    );
+  }, [lockedStatus]);
 
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || nextCursor === null) return;

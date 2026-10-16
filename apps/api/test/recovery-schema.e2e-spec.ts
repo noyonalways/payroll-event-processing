@@ -195,4 +195,103 @@ describe('recovery schema (event_attempts / worker_heartbeats) (e2e)', () => {
       expect(await prisma.payrollEvent.count({ where: { id: event.id } })).toBe(0);
     });
   });
+
+  describe('event recovery (CANCELLED status, attempt_base, event_actions)', () => {
+    it('has CANCELLED in the EventStatus enum, after the pre-existing values', async () => {
+      const labels = await prisma.$queryRaw<Array<{ enumlabel: string }>>`
+        SELECT e.enumlabel FROM pg_enum e
+        JOIN pg_type t ON t.oid = e.enumtypid
+        WHERE t.typname = 'EventStatus'
+        ORDER BY e.enumsortorder`;
+      expect(labels.map((l) => l.enumlabel)).toEqual([
+        'RECEIVED',
+        'QUEUED',
+        'PROCESSING',
+        'SUCCESS',
+        'FAILED',
+        'CANCELLED',
+      ]);
+    });
+
+    it('adds attempt_base (integer, default 0) to payroll_events', async () => {
+      const [column] = await prisma.$queryRaw<
+        Array<{ data_type: string; column_default: string | null; is_nullable: string }>
+      >`
+        SELECT data_type, column_default, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'payroll_events' AND column_name = 'attempt_base'`;
+      // Additive: existing rows (and every non-retry path) keep 0, which is
+      // exactly today's numbering.
+      expect(column).toMatchObject({ data_type: 'integer', is_nullable: 'NO' });
+      expect(column.column_default?.replace(/::.*$/, '')).toBe('0');
+    });
+
+    it('creates event_actions with the expected columns and the per-event index', async () => {
+      const cols = await prisma.$queryRaw<
+        Array<{ column_name: string; data_type: string; udt_name: string }>
+      >`
+        SELECT column_name, data_type, udt_name
+        FROM information_schema.columns
+        WHERE table_name = 'event_actions'
+        ORDER BY ordinal_position`;
+      const byName = Object.fromEntries(cols.map((c) => [c.column_name, c]));
+      expect(Object.keys(byName)).toEqual(
+        expect.arrayContaining(['id', 'event_id', 'action', 'user_id', 'created_at']),
+      );
+      // `action` is the new EventActionType enum; `user_id` is a plain text
+      // snapshot, deliberately not a relation.
+      expect(byName['action']).toMatchObject({ data_type: 'USER-DEFINED', udt_name: 'EventActionType' });
+      expect(byName['user_id']).toMatchObject({ data_type: 'text' });
+      const idx = await indexes('event_actions');
+      expect(idx.some((i) => i.indexdef.includes('event_actions_event_id_idx'))).toBe(true);
+    });
+
+    it('enforces a cascading foreign key from event_actions to payroll_events', async () => {
+      const keys = await prisma.$queryRaw<Array<{ conname: string }>>`
+        SELECT conname FROM pg_constraint
+        WHERE contype = 'f' AND conname = 'event_actions_event_id_fkey'`;
+      expect(keys).toHaveLength(1);
+      // Same orphan-rejection guarantee the attempts trail carries: an audit
+      // row cannot outlive its event.
+      await expect(
+        prisma.$executeRaw`
+          INSERT INTO "event_actions" ("id", "event_id", "action", "user_id", "created_at")
+          VALUES (gen_random_uuid()::text, ${'no-such-event-' + Date.now()}, 'RETRY', 'user', now())`,
+      ).rejects.toThrow();
+    });
+
+    it('reads a cancelled row back as CANCELLED and keeps audit rows only where written', async () => {
+      const organization = await prisma.organization.create({
+        data: { name: 'Recovery Schema Check', slug: `recovery-${Date.now()}` },
+      });
+      const event = await prisma.payrollEvent.create({
+        data: {
+          organizationId: organization.id,
+          eventType: 'SALARY_CHANGE',
+          employeeId: 'recovery-emp',
+          payload: { employeeId: 'recovery-emp' },
+          sequence: 1n,
+          idempotencyKey: `recovery-key-${Date.now()}`,
+        },
+      });
+
+      await prisma.payrollEvent.update({
+        where: { id: event.id },
+        data: { status: 'CANCELLED' },
+      });
+      // Exactly one audit row for the one action that happened — and nothing
+      // creates rows by itself.
+      await prisma.eventAction.create({
+        data: { eventId: event.id, action: 'CANCEL', userId: 'schema-check-user' },
+      });
+
+      const reread = await prisma.payrollEvent.findUnique({ where: { id: event.id } });
+      expect(reread?.status).toBe('CANCELLED');
+      expect(reread?.attemptBase).toBe(0);
+      expect(await prisma.eventAction.count({ where: { eventId: event.id } })).toBe(1);
+
+      await prisma.organization.delete({ where: { id: organization.id } });
+      expect(await prisma.eventAction.count({ where: { eventId: event.id } })).toBe(0);
+    });
+  });
 });
