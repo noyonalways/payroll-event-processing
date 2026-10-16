@@ -6,6 +6,7 @@ import { resolveStageEnvFile } from './config/env-file';
 import { HealthModule } from './common/health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
+import { EmployeesModule } from './employees/employees.module';
 
 @Module({
   imports: [
@@ -41,6 +42,9 @@ import { EventsModule } from './events/events.module';
         // Worker-liveness staleness threshold for /health (design D4): a worker
         // whose last_seen_at is older than this (ms) is reported stale/degraded.
         HEALTH_WORKER_STALE_MS: Joi.number().integer().min(1000).default(15000),
+        // Event-status-stream heartbeat cadence (realtime-status design D4):
+        // the SSE comment-line liveness tick for open stream connections.
+        EVENT_STREAM_HEARTBEAT_INTERVAL_MS: Joi.number().integer().min(1000).default(15000),
         // REQUIRED, and at least 32 chars: this key signs every access token, so
         // a guessable or absent secret would let anyone mint a token for any
         // organization. No default on purpose — the app must fail to boot rather
@@ -61,6 +65,7 @@ import { EventsModule } from './events/events.module';
     HealthModule,
     AuthModule,
     EventsModule,
+    EmployeesModule,
   ],
 })
 export class AppModule {}

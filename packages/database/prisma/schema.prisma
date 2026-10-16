@@ -28,10 +28,12 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships        Membership[]
-  events             PayrollEvent[]
-  idempotencyRecords IdempotencyRecord[]
-  refreshTokens      RefreshToken[]
+  memberships         Membership[]
+  events              PayrollEvent[]
+  idempotencyRecords  IdempotencyRecord[]
+  refreshTokens       RefreshToken[]
+  employeeDomainState EmployeeDomainState[]
+  employees           Employee[]
 
   @@map("organizations")
 }
@@ -107,6 +109,41 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
+// ─── Employee directory ───────────────────────────────────────────────────────
+
+/// One employee of ONE organization: the authoritative roster that event
+/// payloads reference. `employee_number` is the tenant-local public identifier —
+/// the same value a payload carries as `employeeId`, matched exactly and unique
+/// within the organization (two organizations may use the same number as
+/// independent employees). There is deliberately NO foreign key from
+/// `payroll_events.employee_id` (nor from `employee_domain_state.employee_id`)
+/// to this table: the submission-time gate is an application-level lookup, so
+/// event history and the domain timeline are never rewritten when the directory
+/// evolves.
+///
+/// `name` is nullable ONLY for rows adopted from pre-directory event history
+/// (the migration backfills observed employee ids whose names nobody knows);
+/// every directory-created employee carries one. `DELETE` is a soft archive
+/// (active = false): history keeps its meaning and the unique constraint keeps
+/// the number reserved for that organization.
+model Employee {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  /// Tenant-local public identifier; matches payload `employeeId` exactly
+  /// (case-sensitive). Unique per organization, including archived rows.
+  employeeNumber String   @map("employee_number")
+  name           String?
+  department     String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, employeeNumber])
+  @@map("employees")
+}
+
 // ─── Payroll event processing ─────────────────────────────────────────────────
 
 /// Lifecycle of a payroll event.
@@ -129,7 +166,9 @@ enum EventStatus {
 /// `employeeId` is a TENANT-LOCAL identifier (the customer's own payroll employee
 /// number), deliberately NOT a foreign key: two organizations may legitimately use
 /// the same employee number, and the composite unique key keeps their sequences
-/// independent. An organization-owned `employees` directory is a later change.
+/// independent. Event submission validates it against the organization-owned
+/// `employees` directory (employee-directory change) — an application-level
+/// lookup, not a constraint, so historic rows and this table are never rewritten.
 model PayrollEvent {
   id             String      @id @default(uuid())
   organizationId String      @map("organization_id")
@@ -150,9 +189,12 @@ model PayrollEvent {
   /// Result of the simulated external payroll operation, set only on success.
   result         Json?       @map("result")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   attempts     EventAttempt[]
   actions      EventAction[]
+  /// At most one — the unique `source_event_id` FK on `employee_domain_state`
+  /// makes a single state row per successful event enforceable by the store.
+  domainState  EmployeeDomainState?
 
   @@unique([organizationId, employeeId, sequence])
   @@index([organizationId, status])
@@ -262,6 +304,66 @@ model EventAction {
 
   @@index([eventId])
   @@map("event_actions")
+}
+
+/// The business domain a payroll event's change applies to. One event type maps
+/// to exactly one domain (SALARY_CHANGE → COMPENSATION, BANK_ACCOUNT_CHANGE →
+/// BANK_ACCOUNT, ADDRESS_CHANGE → ADDRESS, DEPARTMENT_CHANGE → DEPARTMENT);
+/// the mapping is declared by the event type's handler (domain-effects design
+/// D3), so a new domain-affecting event type extends this enum alongside it.
+enum DomainKind {
+  COMPENSATION
+  BANK_ACCOUNT
+  ADDRESS
+  DEPARTMENT
+}
+
+/// Effective-dated employee state produced by processing (domain-effects
+/// design D1): one append-only timeline row per SUCCESSFUL event, written
+/// inside the SAME claim transaction as the event's terminal `success`
+/// transition + `event_attempts` row — a crash, transient retry, or permanent
+/// failure rolls the state write back with everything else, so state exists
+/// exactly when (and only when) the event reached `success` (reliability R5).
+///
+/// Exactly-once is enforceable by the store: UNIQUE (source_event_id) makes a
+/// second row per event impossible, mirroring how `idempotency_records`'
+/// unique constraint arbitrates the submission side (reliability R2). Rows are
+/// never updated or deleted by processing; the timeline per
+/// (organization, employee, domain) is ordered by `effective_date` (processing
+/// commit order breaks ties), and the current state at a point in time is the
+/// greatest row whose effective date is not after it.
+///
+/// `employeeId` is the same tenant-local identifier as `payroll_events'` —
+/// deliberately NOT an FK to the `employees` directory (employee-directory
+/// change): the submission-time gate is an application-level lookup, so the
+/// domain timeline is never rewritten when the directory evolves. The
+/// (organization_id, employee_id) pair is what scopes isolation. Unlike
+/// `event_attempts` (whose scope is inherited through the FK alone), rows
+/// carry their own `organization_id`: current-state reads are per-employee
+/// org-scoped scans, so the tenant discriminator lives in the row and leads
+/// the timeline index.
+///
+/// `value` holds exactly the applied fields of the event type (e.g.
+/// `{ newSalary, currency }` for COMPENSATION); per-type shape is validated at
+/// submission by the payload DTOs, so the store stays one table for all domains.
+model EmployeeDomainState {
+  id             String     @id @default(uuid())
+  organizationId String     @map("organization_id")
+  employeeId     String     @map("employee_id")
+  domain         DomainKind
+  value          Json       @db.JsonB
+  effectiveDate  DateTime   @map("effective_date") @db.Date
+  sourceEventId  String     @unique @map("source_event_id")
+  createdAt      DateTime   @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceEvent  PayrollEvent @relation(fields: [sourceEventId], references: [id], onDelete: Cascade)
+
+  // Current-state lookups: equality prefix (organization_id, employee_id,
+  // domain) fixes a contiguous range already ordered effective_date DESC, so a
+  // point-in-time read is the first row in range.
+  @@index([organizationId, employeeId, domain, effectiveDate(sort: Desc)])
+  @@map("employee_domain_state")
 }
 
 /// One row per running worker process, upserted on a heartbeat cadence

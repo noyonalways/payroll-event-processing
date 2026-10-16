@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppModule, HttpExceptionFilter } from '@repo/core';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees } from './support/directory';
 
 /**
  * E2E for the Redis-down contract — Postgres required, Redis must NOT be
@@ -28,6 +29,8 @@ describe('POST /events with Redis unreachable (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let tenant: TestTenant;
+  /* Pre-created gate-valid employees for this suite's tenant. */
+  let employees: DirectoryEmployees;
   let deadPort: string;
 
   beforeAll(async () => {
@@ -50,6 +53,8 @@ describe('POST /events with Redis unreachable (e2e)', () => {
     await app.init();
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'queue-redis-down');
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('redown', 4);
   });
 
   beforeEach(async () => {
@@ -76,7 +81,7 @@ describe('POST /events with Redis unreachable (e2e)', () => {
 
   describe('submission with Redis down', () => {
     it('returns 201 and persists the row without surfacing an error', async () => {
-      const employeeId = `redown-${randomUUID()}`;
+      const employeeId = employees.draw('redown');
       const idempotencyKey = key();
 
       const res = await http()
@@ -97,7 +102,7 @@ describe('POST /events with Redis unreachable (e2e)', () => {
     });
 
     it('re-submitting the same key returns the stored response and writes no second row', async () => {
-      const employeeId = `redown-${randomUUID()}`;
+      const employeeId = employees.draw('redown');
       const idempotencyKey = key();
       const body = bankAccount(employeeId);
 

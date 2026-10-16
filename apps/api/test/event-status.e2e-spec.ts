@@ -6,6 +6,7 @@ import { AttemptErrorType, AttemptStatus } from '@prisma/client';
 import { AppModule, HttpExceptionFilter, setupSwagger, WorkerModule } from '@repo/core';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees } from './support/directory';
 
 /**
  * E2E for the read-only status surface of GET /events/:id (event-status-api) —
@@ -71,6 +72,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   let workerApp: INestApplication;
   let prisma: PrismaService;
   let tenant: TestTenant;
+  let employees: DirectoryEmployees;
 
   beforeAll(async () => {
     process.env.PAYROLL_FAILURE_MODE = 'always-transient';
@@ -91,6 +93,10 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
     await app.init();
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'event-status-transient');
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('queued', 3);
+    await employees.seed('failed', 3);
+    await employees.seed('ordered', 3);
 
     const workerModuleRef: TestingModule = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -145,7 +151,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   };
 
   it('returns the retried lifecycle state with a non-empty FAILED trail (queued scenario)', async () => {
-    const employeeId = `queued-${randomUUID()}`;
+    const employeeId = employees.draw('queued');
     const id = (await submitSalary(employeeId)).body.id as string;
     const payload = SALARY_PAYLOAD(employeeId);
 
@@ -181,7 +187,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   });
 
   it('returns the failed terminal state with one FAILED row per attempt (failed scenario)', async () => {
-    const employeeId = `failed-${randomUUID()}`;
+    const employeeId = employees.draw('failed');
     const id = (await submitSalary(employeeId)).body.id as string;
 
     // 5 attempts, exponential backoff from a 1 s base → exhausted in ~16 s.
@@ -210,7 +216,7 @@ describe('GET /events/:id — queued, failed, ordering, 404 (event-status-api, a
   });
 
   it('returns attempts ordered ascending by attemptNumber on a multi-attempt trail', async () => {
-    const employeeId = `ordered-${randomUUID()}`;
+    const employeeId = employees.draw('ordered');
     const id = (await submitSalary(employeeId)).body.id as string;
 
     // Let the event exhaust first: the worker appends FAILED(TEMPORARY) rows
@@ -278,6 +284,7 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
   let app: INestApplication;
   let workerApp: INestApplication;
   let prisma: PrismaService;
+  let employees: DirectoryEmployees;
   let tenant: TestTenant;
 
   beforeAll(async () => {
@@ -299,6 +306,8 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
     await app.init();
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'event-status-success');
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('success', 3);
 
     const workerModuleRef: TestingModule = await Test.createTestingModule({
       imports: [WorkerModule],
@@ -337,7 +346,7 @@ describe('GET /events/:id — successful lifecycle (event-status-api, always-suc
   };
 
   it('returns success with processedAt/result and a SUCCESS attempt matching the committed row', async () => {
-    const employeeId = `success-${randomUUID()}`;
+    const employeeId = employees.draw('success');
     const id = (
       await http()
         .post('/events')

@@ -4,6 +4,7 @@ import { logout } from './api/auth';
 import { AuthView } from './components/AuthView';
 import { Button } from './components/ui/button';
 import { DeadLetterView } from './components/DeadLetterView';
+import { EmployeesView } from './components/EmployeesView';
 import { EventDetail } from './components/EventDetail';
 import { EventFilters } from './components/EventFilters';
 import { EventList } from './components/EventList';
@@ -31,13 +32,14 @@ function App() {
 /**
  * Two-pane demo UI over the organization's history: submit typed payroll
  * events and browse the SERVER-driven event history (`GET /events`) with
- * combinable filters and load-more paging. Non-terminal rows keep polling
- * `GET /events/{id}` so badges and attempt counts move without a manual
- * refresh; the detail panel shows the processing result and the failure trail.
- * There is no client-side list persistence — every view is what the server
- * holds for the signed-in organization, so sign-out leaves nothing behind and
- * reloads simply re-fetch. Requests go through the authenticated client, so
- * the header names the organization the session is acting in.
+ * combinable filters and load-more paging. Status updates arrive over the
+ * event-status-stream — badges and attempt counts move as transitions commit;
+ * while the stream is down the rows fall back to `GET /events/{id}` polling
+ * (see useEventHistory). The detail panel shows the processing result and the
+ * failure trail. There is no client-side list persistence — every view is what
+ * the server holds for the signed-in organization, so sign-out leaves nothing
+ * behind and reloads simply re-fetch. Requests go through the authenticated
+ * client, so the header names the organization the session is acting in.
  *
  * The recovery actions (event-recovery) live on the history rows — retry on
  * `failed`, cancel on pending — and a dedicated dead-letter view (a failed-only
@@ -45,7 +47,9 @@ function App() {
  */
 function PayrollWorkspace({ session }: { session: StoredSession }) {
   const history = useEventHistory();
-  const [view, setView] = useState<'history' | 'dead-letter'>('history');
+  const [view, setView] = useState<'history' | 'dead-letter' | 'employees'>(
+    'history',
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Derive the selection; when the selected row leaves the current view
   // (filters changed, page re-fetched), the detail panel falls back to the
@@ -88,8 +92,12 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
                 · {session.role}
               </span>
               <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-                live polling · {history.rows.length} shown
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${history.streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                  aria-hidden
+                />
+                {history.streamConnected ? 'live' : 'polling fallback'} ·{' '}
+                {history.rows.length} shown
               </span>
               <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
                 Sign out
@@ -132,10 +140,25 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
           >
             Dead letters
           </Button>
+          <Button
+            type="button"
+            variant={view === 'employees' ? 'default' : 'outline'}
+            size="sm"
+            role="tab"
+            aria-selected={view === 'employees'}
+            onClick={() => setView('employees')}
+            data-testid="view-employees"
+          >
+            Employees
+          </Button>
         </div>
 
         {view === 'dead-letter' ? (
           <DeadLetterView />
+        ) : view === 'employees' ? (
+          <div className="mx-auto max-w-4xl">
+            <EmployeesView />
+          </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-2">
             <section className="space-y-6">
@@ -222,7 +245,10 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
                 Event detail
               </h2>
               {selected ? (
-                <EventDetail entry={selected} />
+                <EventDetail
+                  entry={selected}
+                  live={history.streamConnected}
+                />
               ) : (
                 <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
                   Select an event to inspect its lifecycle, processing result, and

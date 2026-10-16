@@ -6,6 +6,7 @@ import { AppModule, HttpExceptionFilter } from '@repo/core';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION } from '@repo/shared';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees } from './support/directory';
 
 /**
  * E2E for the event submission contract — runs against real Postgres
@@ -24,6 +25,8 @@ describe('POST /events (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let tenant: TestTenant;
+  /** Pre-created gate-valid employee numbers for this suite's tenant. */
+  let employees: DirectoryEmployees;
 
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -45,7 +48,15 @@ describe('POST /events (e2e)', () => {
 
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'submit');
+    // Every handed-out employeeId is a pre-created ACTIVE directory member of
+    // the submitting tenant — the submission gate accepts nothing else.
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('emp', 100);
+    await employees.seed('seq', 10);
+    await employees.seed('ind', 10);
   });
+
+  const employee = (prefix = 'emp') => employees.draw(prefix);
 
   beforeEach(async () => {
     await prisma.payrollEvent.deleteMany({});
@@ -61,7 +72,6 @@ describe('POST /events (e2e)', () => {
   /** Authenticated POST /events — the tenant's token is always attached. */
   const submit = () => request(app.getHttpServer()).post('/events').set(tenant.headers);
   const key = () => randomUUID();
-  const employee = (prefix = 'emp') => `${prefix}-${randomUUID()}`;
 
   const bankAccount = () => ({
     eventType: 'BANK_ACCOUNT_CHANGE',

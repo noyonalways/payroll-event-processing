@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { MembershipRole, Prisma } from '@prisma/client';
+import { DEMO_EMPLOYEE_DEPARTMENT, DEMO_EMPLOYEE_SEEDS } from '@repo/shared';
 import { PrismaService } from '@repo/database';
 import { AuthService } from './auth.service';
 import { AuthenticatedActor } from './authenticated-actor';
@@ -53,6 +54,7 @@ describe('AuthService', () => {
     organization: { create: jest.fn() },
     user: { create: jest.fn() },
     membership: { create: jest.fn() },
+    employee: { createMany: jest.fn() },
   };
   const prisma = {
     user: { findUnique: jest.fn() },
@@ -84,6 +86,7 @@ describe('AuthService', () => {
     tx.organization.create.mockResolvedValue(organization);
     tx.user.create.mockResolvedValue(user);
     tx.membership.create.mockResolvedValue(membershipWithTenant);
+    tx.employee.createMany.mockResolvedValue({ count: 5 });
     prisma.user.findUnique.mockResolvedValue(null);
     service = new AuthService(
       prisma as unknown as PrismaService,
@@ -123,6 +126,27 @@ describe('AuthService', () => {
         expiresIn: '15m',
         refreshExpiresAt: '2026-11-14T12:00:00.000Z',
       });
+    });
+
+    it('seeds the five reserved demo employees for the new organization in the same transaction', async () => {
+      await service.register(registerDto);
+
+      // Same transaction, after the membership: the partially-created-tenant
+      // guarantee extends to a directory that can pass the submission gate
+      // (employee-directory design D7).
+      expect(tx.employee.createMany).toHaveBeenCalledTimes(1);
+      expect(tx.membership.create).toHaveBeenCalled();
+      const args = tx.employee.createMany.mock.calls[0][0] as {
+        data: Array<{ organizationId: string; employeeNumber: string; name: string; department: string; active: boolean }>;
+        skipDuplicates: boolean;
+      };
+      expect(args.skipDuplicates).toBe(true);
+      expect(args.data.map((d) => d.employeeNumber).sort()).toEqual(
+        DEMO_EMPLOYEE_SEEDS.map((s) => s.employeeNumber).sort(),
+      );
+      expect(new Set(args.data.map((d) => d.organizationId))).toEqual(new Set([ORG]));
+      expect(args.data.every((d) => d.active === true)).toBe(true);
+      expect(args.data.every((d) => d.department === DEMO_EMPLOYEE_DEPARTMENT)).toBe(true);
     });
 
     it('never persists the plaintext password', async () => {

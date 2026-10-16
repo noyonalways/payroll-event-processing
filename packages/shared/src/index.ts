@@ -23,10 +23,18 @@ export {
 } from './errors/payroll-processing.error';
 export {
   DEMO_EMPLOYEE_PREFIX,
+  DEMO_EMPLOYEE_DEPARTMENT,
+  DEMO_EMPLOYEE_SEEDS,
   DEMO_RECOVER_THRESHOLD_ATTEMPT,
   DEMO_FAIL_THRESHOLD_ATTEMPT,
   DEMO_PACING_MIN_MS,
   DEMO_PACING_MAX_MS,
 } from './demo-scenarios';
-export type { DemoScenario } from './demo-scenarios';
+export type { DemoScenario, DemoEmployeeSeed } from './demo-scenarios';
 export { demoScenarioFor } from './demo-scenarios';
+export {
+  EVENT_LIFECYCLE_STATUSES,
+  type EventLifecycleStatus,
+} from './lifecycle';
+export { EVENT_STATUS_STREAM_CHANNEL } from './stream.constants';
+export type { EventStatusNotification } from './stream.types';

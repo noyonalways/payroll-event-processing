@@ -42,6 +42,30 @@ export type DemoScenario =
   | 'FAILAFTER'
   | 'PERMANENT';
 
+/**
+ * The five reserved scenario employees as concrete directory rows. The
+ * employee-directory seeding uses exactly these numbers (registration inserts
+ * them; migration `20261016000000_employee_directory` backfills them for
+ * organizations that predate the directory and must stay in sync with the
+ * numbers above, which are the lever contract). Names/department are cosmetic
+ * directory metadata — the processing lever resolves on the `EMP-DEMO-` prefix.
+ */
+export interface DemoEmployeeSeed {
+  employeeNumber: string;
+  name: string;
+}
+
+/** Directory department the seeded demo employees carry. */
+export const DEMO_EMPLOYEE_DEPARTMENT = 'Demo';
+
+export const DEMO_EMPLOYEE_SEEDS: readonly DemoEmployeeSeed[] = [
+  { employeeNumber: 'EMP-DEMO-SUCCESS', name: 'Demo employee (success)' },
+  { employeeNumber: 'EMP-DEMO-RECOVER', name: 'Demo employee (recover)' },
+  { employeeNumber: 'EMP-DEMO-TRANSIENT', name: 'Demo employee (transient)' },
+  { employeeNumber: 'EMP-DEMO-FAILAFTER', name: 'Demo employee (fail-after-retries)' },
+  { employeeNumber: 'EMP-DEMO-PERMANENT', name: 'Demo employee (permanent)' },
+];
+
 /** First 1-based attempt on which RECOVER stops failing (default retries = 5). */
 export const DEMO_RECOVER_THRESHOLD_ATTEMPT = 3;
 

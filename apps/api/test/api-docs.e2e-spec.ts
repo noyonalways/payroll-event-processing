@@ -97,6 +97,22 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
       }
     });
 
+    it('documents GET /events/stream as bearer-secured with 401 (realtime-status)', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      const stream = doc.paths['/events/stream']?.get;
+      expect(stream).toBeDefined();
+      // Same header authentication as every other event endpoint.
+      expect(stream.security).toEqual([{ bearer: [] }]);
+      expect(stream.responses['401']).toBeDefined();
+      // The 200 is the SSE frame stream (not a JSON media type) and its
+      // documentation names the notification event kind.
+      const ok = JSON.stringify(stream.responses['200']);
+      expect(ok).toContain('text/event-stream');
+      expect(ok).toContain('lifecycle');
+      expect(ok).toContain('heartbeat');
+    });
+
     it('documents both recovery operations as bearer-secured with 200/404/409/401', async () => {
       const doc = (await http().get('/api-docs-json').expect(200)).body;
 
@@ -200,6 +216,55 @@ describe('Swagger/OpenAPI docs (e2e)', () => {
         expect(op.security).toEqual([{ bearer: [] }]);
         expect(op.responses['401']).toBeDefined();
       }
+    });
+
+    it('documents the employees directory endpoints (employee-directory)', async () => {
+      const doc = (await http().get('/api-docs-json').expect(200)).body;
+
+      // The five CRUD routes exist…
+      for (const [path, method] of [
+        ['/employees', 'post'],
+        ['/employees', 'get'],
+        ['/employees/{id}', 'get'],
+        ['/employees/{id}', 'patch'],
+        ['/employees/{id}', 'delete'],
+      ] as const) {
+        const op = doc.paths[path]?.[method];
+        expect(op).toBeDefined();
+        // …bearer-secured like every payroll operation, with a documented 401.
+        expect(op.security).toEqual([{ bearer: [] }]);
+        expect(op.responses['401']).toBeDefined();
+      }
+
+      // Create: typed 201 + the documented validation/conflict failures.
+      const createOp = doc.paths['/employees'].post;
+      expect(createOp.responses['201']).toBeDefined();
+      expect(createOp.responses['400']).toBeDefined();
+      expect(createOp.responses['409']).toBeDefined();
+
+      // List: the DTO's deny-by-default query surface + typed page response.
+      const list = doc.paths['/employees'].get;
+      const paramNames = list.parameters.map((p: { name: string }) => p.name);
+      for (const name of ['active', 'search', 'limit', 'cursor']) {
+        expect(paramNames).toContain(name);
+      }
+      const limitParam = list.parameters.find((p: { name: string }) => p.name === 'limit');
+      expect(limitParam.schema.minimum).toBe(1);
+      expect(limitParam.schema.maximum).toBe(100);
+
+      // Single-record routes: 404 documented; archive answers 204, not a body.
+      for (const method of ['get', 'patch']) {
+        expect(doc.paths['/employees/{id}'][method].responses['404']).toBeDefined();
+        expect(doc.paths['/employees/{id}'][method].responses['200']).toBeDefined();
+      }
+      expect(doc.paths['/employees/{id}'].patch.responses['400']).toBeDefined();
+      const del = doc.paths['/employees/{id}'].delete;
+      expect(del.responses['204']).toBeDefined();
+      expect(del.responses['404']).toBeDefined();
+
+      // The employee representation is a documented component schema.
+      expect(doc.components.schemas).toHaveProperty('EmployeeResponseDto');
+      expect(doc.components.schemas).toHaveProperty('EmployeesListResponseDto');
     });
 
     it('documents GET /events with its query parameters and 400/401 responses', async () => {

@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppModule, HttpExceptionFilter, WorkerModule } from '@repo/core';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees } from './support/directory';
 
 /**
  * E2E for the full queue pipeline — REAL Postgres + REAL Redis required
@@ -33,6 +34,8 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
   let workerApp: INestApplication;
   let prisma: PrismaService;
   let tenant: TestTenant;
+  /* Pre-created gate-valid employees for this suite's tenant. */
+  let employees: DirectoryEmployees;
 
   beforeAll(async () => {
     // The simulated provider reads these rates at module build; pin a
@@ -57,6 +60,9 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
     await app.init();
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'event-queue');
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('pipe', 3);
+    await employees.seed('burst', 3);
 
     // Boot the real consumer so the queue is actually drained.
     const workerModuleRef: TestingModule = await Test.createTestingModule({
@@ -81,7 +87,7 @@ describe('POST /events → worker queue pipeline (e2e)', () => {
 
   const http = () => request(app.getHttpServer());
   const key = () => randomUUID();
-  const employee = (prefix: string) => `${prefix}-${randomUUID()}`;
+  const employee = (prefix: string) => employees.draw(prefix);
 
   const submit = async (employeeId: string, idempotencyKey: string) =>
     http()

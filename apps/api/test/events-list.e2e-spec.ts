@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppModule, HttpExceptionFilter } from '@repo/core';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { ensureEmployee } from './support/directory';
 
 /**
  * E2E for the read-only event-history surface of GET /events
@@ -82,6 +83,13 @@ describe('GET /events (events-query-api)', () => {
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'events-list');
     otherTenant = await registerTenant(app, 'events-list-other');
+
+    // Every literal employeeId this suite submits must be an ACTIVE directory
+    // employee of the submitting organization (submission gate).
+    for (const number of ['emp-0', 'emp-1', 'emp-2', 'emp-3', 'emp-4', 'emp-5', 'emp-6', 'emp-last', 'emp-new', 'emp-x', 'emp-y']) {
+      await ensureEmployee(prisma, tenant.organizationId, number);
+    }
+    await ensureEmployee(prisma, otherTenant.organizationId, 'emp-1');
   });
 
   beforeEach(async () => {

@@ -3,7 +3,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { randomUUID } from 'crypto';
 import { AppModule, HttpExceptionFilter } from '@repo/core';
+import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees, ensureEmployee } from './support/directory';
 
 /**
  * E2E for the tenant boundary itself — two organizations registered through the
@@ -27,7 +29,11 @@ jest.setTimeout(30_000);
 
 describe('multi-tenant isolation (e2e)', () => {
   let app: INestApplication;
+  let prisma: PrismaService;
   let tenantA: TestTenant;
+  /* Per-tenant directory pools — the gate only accepts each org's own rows. */
+  let employeesA: DirectoryEmployees;
+  let employeesB: DirectoryEmployees;
   let tenantB: TestTenant;
 
   beforeAll(async () => {
@@ -47,10 +53,22 @@ describe('multi-tenant isolation (e2e)', () => {
     );
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
+    prisma = app.get(PrismaService);
 
     // Two independent organizations with two independent owner sessions.
     tenantA = await registerTenant(app, 'isolation-a');
     tenantB = await registerTenant(app, 'isolation-b');
+    // Each tenant gets its own directory pool: a number drawn for one
+    // organization's submission is an ACTIVE employee THERE and nowhere else.
+    employeesA = new DirectoryEmployees(prisma, tenantA.organizationId);
+    employeesB = new DirectoryEmployees(prisma, tenantB.organizationId);
+    await employeesA.seed('iso-a', 3);
+    await employeesA.seed('iso-key-a', 3);
+    await employeesA.seed('iso-404', 3);
+    await employeesA.seed('iso-auth', 3);
+    await employeesA.seed('iso-payload', 3);
+    await employeesB.seed('iso-b', 3);
+    await employeesB.seed('iso-key-b', 3);
   });
 
   afterAll(async () => {
@@ -59,7 +77,7 @@ describe('multi-tenant isolation (e2e)', () => {
 
   const http = () => request(app.getHttpServer());
   const key = () => randomUUID();
-  const employee = (prefix: string) => `${prefix}-${randomUUID()}`;
+// employee numbers now come from the per-tenant pools (employeesA / employeesB)
 
   /** A payload whose address fields are free-form, so a tenant can own a sentinel. */
   const addressPayload = (employeeId: string, street = 'Main St') => ({
@@ -90,7 +108,7 @@ describe('multi-tenant isolation (e2e)', () => {
     http().get(`/events/${id}`).set(tenant.headers);
 
   it('reads its own event but gets 404 for another tenant’s event, leaking none of its fields', async () => {
-    const employeeId = employee('iso-a');
+    const employeeId = employeesA.draw('iso-a');
     const street = `sentinel-${randomUUID()}`;
     const id = (await submitAs(tenantA, addressPayload(employeeId, street))).body
       .id as string;
@@ -126,7 +144,7 @@ describe('multi-tenant isolation (e2e)', () => {
 
     // The same call for B's OWN event succeeds as 200 — the 404 above is the
     // tenant boundary, not a broken read path.
-    const ownEmployeeId = employee('iso-b');
+    const ownEmployeeId = employeesB.draw('iso-b');
     const ownId = (await submitAs(tenantB, addressPayload(ownEmployeeId))).body
       .id as string;
     const own = (await readAs(tenantB, ownId).expect(200)).body;
@@ -139,7 +157,7 @@ describe('multi-tenant isolation (e2e)', () => {
   });
 
   it('reports another tenant’s event exactly like a completely unknown id', async () => {
-    const id = (await submitAs(tenantA, addressPayload(employee('iso-404'))))
+    const id = (await submitAs(tenantA, addressPayload(employeesA.draw('iso-404'))))
       .body.id as string;
     const unknownId = randomUUID();
 
@@ -169,8 +187,8 @@ describe('multi-tenant isolation (e2e)', () => {
 
   it('lets both tenants submit with the same Idempotency-Key and serves each its own stored response', async () => {
     const shared = key();
-    const employeeA = employee('iso-key-a');
-    const employeeB = employee('iso-key-b');
+    const employeeA = employeesA.draw('iso-key-a');
+    const employeeB = employeesB.draw('iso-key-b');
 
     const firstA = await submitAs(tenantA, addressPayload(employeeA), shared);
     const firstB = await submitAs(tenantB, addressPayload(employeeB), shared);
@@ -197,7 +215,11 @@ describe('multi-tenant isolation (e2e)', () => {
   });
 
   it('gives both tenants sequence 1 for the same employee number, with independent counters', async () => {
-    const sharedEmployee = employee('iso-seq');
+        // The shared number exists as an ACTIVE employee in BOTH directories —
+    // each organization's gate knows it independently.
+    const sharedEmployee = `iso-seq-shared-${randomUUID().slice(0, 12)}`;
+    await ensureEmployee(prisma, tenantA.organizationId, sharedEmployee);
+    await ensureEmployee(prisma, tenantB.organizationId, sharedEmployee);
 
     const a1 = await submitAs(tenantA, addressPayload(sharedEmployee));
     const b1 = await submitAs(tenantB, addressPayload(sharedEmployee));
@@ -224,7 +246,7 @@ describe('multi-tenant isolation (e2e)', () => {
   });
 
   it('rejects requests with no token or a tampered token', async () => {
-    const employeeId = employee('iso-auth');
+    const employeeId = employeesA.draw('iso-auth');
     const id = (await submitAs(tenantA, addressPayload(employeeId))).body
       .id as string;
 
@@ -252,7 +274,7 @@ describe('multi-tenant isolation (e2e)', () => {
   });
 
   it('never returns the submitting tenant’s payload to another tenant', async () => {
-    const employeeId = employee('iso-payload');
+    const employeeId = employeesA.draw('iso-payload');
     const street = `secret-${randomUUID()}`;
 
     const id = (await submitAs(tenantA, addressPayload(employeeId, street))).body

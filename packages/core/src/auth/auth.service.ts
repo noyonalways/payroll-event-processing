@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Membership, MembershipRole, Organization, Prisma, User } from '@prisma/client';
 import { randomBytes } from 'crypto';
+import { DEMO_EMPLOYEE_SEEDS, DEMO_EMPLOYEE_DEPARTMENT } from '@repo/shared';
 import { PrismaService } from '@repo/database';
 import { AuthenticatedActor } from './authenticated-actor';
 import { LoginDto } from './dto/login.dto';
@@ -195,7 +196,7 @@ export class AuthService {
               name: input.name,
             },
           });
-          return tx.membership.create({
+          const membership = await tx.membership.create({
             data: {
               userId: user.id,
               organizationId: organization.id,
@@ -203,6 +204,24 @@ export class AuthService {
             },
             include: { organization: true, user: true },
           });
+          // The five reserved `EMP-DEMO-*` scenario employees are directory
+          // members from birth (employee-directory design D7): a brand-new
+          // organization must be able to demo every lifecycle case under the
+          // submission gate, which accepts only directory employees. Same
+          // transaction as the tenant — a tenant whose demo submissions would
+          // 422 is exactly the partially-created state this transaction exists
+          // to prevent. Re-running is a no-op (skipDuplicates).
+          await tx.employee.createMany({
+            data: DEMO_EMPLOYEE_SEEDS.map((seed) => ({
+              organizationId: organization.id,
+              employeeNumber: seed.employeeNumber,
+              name: seed.name,
+              department: DEMO_EMPLOYEE_DEPARTMENT,
+              active: true,
+            })),
+            skipDuplicates: true,
+          });
+          return membership;
         });
       } catch (error) {
         if (this.isSlugCollision(error) && attempt < SLUG_ATTEMPTS - 1) {

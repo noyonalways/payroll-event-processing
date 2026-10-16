@@ -165,7 +165,19 @@ describe('App session gate', () => {
 describe('App event history (server-driven)', () => {
   it('loads the organization history through the authenticated client on first render', async () => {
     setSession(sessionResponse());
-    fetchMock.mockResolvedValue(jsonResponse(listPage([listRow('e-history-1')])));
+    // The workspace route: events list for the history, a directory page for
+    // the submit form's employee picker (actor-directory backed).
+    fetchMock.mockImplementation((url: RequestInfo | URL) =>
+      String(url).includes('/employees')
+        ? Promise.resolve(
+            jsonResponse({
+              data: [],
+              nextCursor: null,
+              limit: 100,
+            }),
+          )
+        : Promise.resolve(jsonResponse(listPage([listRow('e-history-1')]))),
+    );
 
     render(<App />);
 

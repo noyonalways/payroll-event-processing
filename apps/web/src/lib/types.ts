@@ -159,6 +159,51 @@ export interface EventListQuery {
   cursor?: string;
 }
 
+/**
+ * One directory employee (employee-directory). `employeeNumber` is the
+ * tenant-local identifier payloads carry as `employeeId`; `name` is null only
+ * for rows adopted from pre-directory event history.
+ */
+export interface Employee {
+  id: string;
+  employeeNumber: string;
+  name: string | null;
+  department: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Body of GET /employees: one explicit page with its forward cursor. */
+export interface EmployeeListResponse {
+  data: Employee[];
+  nextCursor: string | null;
+  limit: number;
+}
+
+/** The query parameters GET /employees accepts, as the UI sends them. */
+export interface EmployeeListQuery {
+  active?: boolean;
+  search?: string;
+  /** Page size (1–100); the API defaults to 50 when omitted. */
+  limit?: number;
+  cursor?: string;
+}
+
+/** Body of POST /employees. */
+export interface CreateEmployeeBody {
+  employeeNumber: string;
+  name: string;
+  department?: string;
+}
+
+/** Body of PATCH /employees/{id} — employeeNumber is immutable API-side. */
+export interface UpdateEmployeeBody {
+  name?: string;
+  department?: string;
+  active?: boolean;
+}
+
 /** Role held within an organization (mirrors the Prisma membership enum). */
 export type MembershipRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 

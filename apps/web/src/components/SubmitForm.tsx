@@ -26,6 +26,7 @@ import {
 import type { DemoScenarioId } from '../lib/scenarios';
 import { EVENT_TYPES } from '../lib/types';
 import type { EventSubmissionResponse, EventType } from '../lib/types';
+import { useActiveEmployees } from '../lib/useEmployees';
 
 export interface SubmitFormProps {
   /** Called after a 201 so the history view can refresh page one. */
@@ -37,8 +38,11 @@ export interface SubmitFormProps {
  * source for the `event-submission` contract) and are pre-filled with sample
  * values that pass API validation, so a reviewer can submit immediately or
  * tweak a single field. Client-side checks block obviously incomplete
- * submissions; the API stays the authority — a structured 400 is surfaced
- * inline without losing the entered values. Every submit uses a fresh
+ * submissions; the API stays the authority — a structured 400/422 is surfaced
+ * inline without losing the entered values. The `employeeId` field is backed
+ * by the employee directory (a picker over ACTIVE employees, employee-directory
+ * capability), so an event can only be addressed to a registered, active
+ * employee. Every submit uses a fresh
  * `crypto.randomUUID()` as the `Idempotency-Key`, and a 201 tells the parent
  * to refresh the history page one — the server list is the only place events
  * are shown, so nothing is added locally.
@@ -55,6 +59,12 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
     null,
   );
   const [submitting, setSubmitting] = useState(false);
+
+  // The employee field is directory-backed (employee-directory): only ACTIVE
+  // directory employees of this organization — the same records the gate
+  // validates against — are offered. The seeded `EMP-DEMO-*` members are
+  // ordinary directory rows, so the scenario selector's pre-fills resolve.
+  const { employees, loading: employeesLoading } = useActiveEmployees();
 
   function updateValue(name: string, value: string) {
     setValues((prev) => ({ ...prev, [name]: value }));
@@ -143,7 +153,7 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
           <h2 className="text-lg font-semibold tracking-tight">Submit an event</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Pre-filled sample values — pick a demo scenario, tweak a field, then
-            submit. A structured 400 from the API is surfaced inline.
+            submit. A structured 400/422 from the API is surfaced inline.
           </p>
           {lastResult && (
             <p className="mt-1.5 truncate text-xs text-emerald-700 dark:text-emerald-300">
@@ -222,6 +232,58 @@ export function SubmitForm({ onSubmitted }: SubmitFormProps) {
       {fieldsFor(eventType).map((spec) => {
         const value = values[spec.name] ?? '';
         const empty = value.trim() === '';
+
+        // The employee field is a picker, not a free-text guess: every option
+        // is an ACTIVE directory employee, so an unregistered or archived
+        // number can't even be typed. A value that is set but somehow not
+        // offered (a mid-session archive, or a failed directory load) still
+        // renders so nothing silently changes under the user — the API's 422
+        // then explains it.
+        if (spec.name === 'employeeId') {
+          const listed = employees.some(
+            (employee) => employee.employeeNumber === value,
+          );
+          return (
+            <div key={spec.name} className="mt-3">
+              <span className="px-1 text-sm font-medium text-foreground">
+                {spec.label}
+              </span>
+              <Select
+                value={value || undefined}
+                onValueChange={(next) => updateValue(spec.name, next)}
+              >
+                <SelectTrigger data-testid="employee-picker-trigger" className="mt-1.5">
+                  <SelectValue
+                    placeholder={
+                      employeesLoading ? 'Loading employees…' : 'Select an employee'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent data-testid="employee-picker-content">
+                  {employees.map((employee) => (
+                    <SelectItem
+                      key={employee.id}
+                      value={employee.employeeNumber}
+                      data-testid={`employee-picker-option-${employee.employeeNumber}`}
+                    >
+                      {employee.employeeNumber}
+                      {employee.name ? ` — ${employee.name}` : ''}
+                    </SelectItem>
+                  ))}
+                  {!empty && !listed && value !== undefined && (
+                    <SelectItem value={value} data-testid="employee-picker-option-current">
+                      {value} (not offered — see the directory)
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              {errors[spec.name] && (
+                <p className="mt-1 px-1 text-xs text-destructive">{errors[spec.name]}</p>
+              )}
+            </div>
+          );
+        }
+
         return (
           <div key={spec.name} className="mt-3">
             <Input

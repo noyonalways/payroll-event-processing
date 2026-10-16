@@ -1,4 +1,4 @@
-import { Injectable, Logger, HttpStatus, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus, NotFoundException, BadRequestException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma, EventStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '@repo/database';
@@ -6,6 +6,7 @@ import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 import { PayloadValidator } from './payload.validator';
+import { EventStatusPublisher } from './event-status.publisher';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import {
   DEFAULT_PAGE_LIMIT,
@@ -140,6 +141,7 @@ export class EventsService {
     private readonly payloadValidator: PayloadValidator,
     private readonly eventQueue: PayrollEventQueueService,
     private readonly idempotency: IdempotencyService,
+    private readonly streamPublisher: EventStatusPublisher,
   ) {}
 
   async createEvent(
@@ -150,6 +152,34 @@ export class EventsService {
 
     // Every supported payload type requires employeeId; payload is validated above.
     const employeeId = input.payload.employeeId as string;
+
+    // Directory gate (employee-directory, design D3): the employeeId must
+    // reference an ACTIVE employee of THIS organization — one indexed read on
+    // the tenant-qualified unique key, so two organizations that share a
+    // number stay independent (R6/tenancy). The rejection is a BUSINESS
+    // validation — permanent by definition (R1), the queue machinery is never
+    // involved — and it fires BEFORE the idempotency layer (R2): a rejected
+    // attempt consumes no Idempotency-Key, so registering (or reactivating)
+    // the employee and resubmitting with the same key creates a fresh event.
+    const directoryEmployee = await this.prisma.employee.findUnique({
+      where: {
+        organizationId_employeeNumber: {
+          organizationId,
+          employeeNumber: employeeId,
+        },
+      },
+      select: { active: true },
+    });
+    if (!directoryEmployee || !directoryEmployee.active) {
+      this.logger.warn(
+        `Submission rejected: employeeId "${employeeId}" is ` +
+          `${directoryEmployee ? 'archived' : 'unknown'} in organization ` +
+          `${organizationId} (${input.eventType}, validation stage=directory-gate, key ${input.idempotencyKey})`,
+      );
+      throw new UnprocessableEntityException(
+        `No active employee with employeeId "${employeeId}" exists in this organization`,
+      );
+    }
 
     this.logger.debug(
       `Submitting ${input.eventType} for employee ${employeeId} in organization ` +
@@ -174,7 +204,22 @@ export class EventsService {
 
       // Background the queue so the 201 never depends on Redis state. The row is
       // marked `queued` first (always recoverable), then enqueued best-effort.
-      await this.markQueued(organizationId, submitted.eventId, employeeId);
+      const queued = await this.markQueued(organizationId, submitted.eventId, employeeId);
+      // Post-commit stream announcement (realtime-status design D3): announce
+      // `queued` only when THIS guarded transition actually applied — whoever
+      // else moved the row owns that announcement. Fire-and-forget: a stream
+      // failure can never reach the committed 201 (R2).
+      if (queued) {
+        this.streamPublisher.publish({
+          organizationId,
+          eventId: submitted.eventId,
+          eventType: input.eventType,
+          employeeId,
+          sequence: Number(submitted.sequence),
+          status: 'queued',
+          occurredAt: new Date().toISOString(),
+        });
+      }
       try {
         // The queue's helper swallows and logs internally (R2); this catch is
         // the belt-and-braces that keeps ANY queue-side behavior from failing
@@ -406,12 +451,14 @@ export class EventsService {
    * Marks the row `received → queued` (guarded, idempotent — a relay may have
    * already queued it). Failures are logged and never propagated: a submission
    * that cannot be marked queued still returns 201 and is recovered later.
+   * Returns whether THIS call applied the transition, so the stream
+   * announcement is owned by whichever path actually moved the row.
    */
   private async markQueued(
     organizationId: string,
     id: string,
     employeeId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const { count } = await this.prisma.payrollEvent.updateMany({
         where: { id, organizationId, status: EventStatus.RECEIVED },
@@ -419,11 +466,14 @@ export class EventsService {
       });
       if (count === 0) {
         this.logger.debug(`Event ${id} already queued — no transition needed`);
+        return false;
       }
+      return true;
     } catch (error) {
       this.logger.error(
         `Failed to mark event ${id} queued for employee ${employeeId}: ${this.errorMessage(error)}`,
       );
+      return false;
     }
   }
 

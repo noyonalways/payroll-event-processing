@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppModule, HttpExceptionFilter, WorkerModule } from '@repo/core';
 import { PrismaService } from '@repo/database';
 import { registerTenant, TestTenant } from './support/auth';
+import { DirectoryEmployees } from './support/directory';
 
 /**
  * E2E for the simulated processing failure path — REAL Postgres + REAL Redis
@@ -24,6 +25,8 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
   let workerApp: INestApplication;
   let prisma: PrismaService;
   let tenant: TestTenant;
+  /* Pre-created gate-valid employees for this suite's tenant. */
+  let employees: DirectoryEmployees;
 
   beforeAll(async () => {
     // Must be set before the worker's FailureConfig factory runs (module build).
@@ -45,6 +48,8 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
     await app.init();
     prisma = app.get(PrismaService);
     tenant = await registerTenant(app, 'processing');
+    employees = new DirectoryEmployees(prisma, tenant.organizationId);
+    await employees.seed('fail', 3);
 
     // Boot the real consumer so the queue is actually drained.
     const workerModuleRef: TestingModule = await Test.createTestingModule({
@@ -69,7 +74,7 @@ describe('POST /events → worker failure lifecycle (e2e)', () => {
 
   const http = () => request(app.getHttpServer());
   const key = () => randomUUID();
-  const employee = (prefix: string) => `${prefix}-${randomUUID()}`;
+  const employee = (prefix: string) => employees.draw(prefix);
 
   /** Polls Postgres until `predicate` returns a truthy value or the deadline hits. */
   const waitFor = async <T>(

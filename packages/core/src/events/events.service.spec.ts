@@ -1,4 +1,4 @@
-import { HttpStatus, NotFoundException, BadRequestException } from '@nestjs/common';
+import { HttpStatus, NotFoundException, BadRequestException, UnprocessableEntityException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventsService, CreateEventInput, encodeEventListCursor } from './events.service';
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from './dto/events-list.dto';
@@ -6,6 +6,7 @@ import { PayloadValidator } from './payload.validator';
 import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
+import { EventStatusPublisher } from './event-status.publisher';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 const ORG = 'org-a';
 const OTHER_ORG = 'org-b';
@@ -21,9 +22,11 @@ describe('EventsService', () => {
   const prisma = {
     payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
     eventAttempt: { findMany: jest.fn() },
+    employee: { findUnique: jest.fn() },
   };
   const eventQueue = { enqueueBestEffort: jest.fn() };
   const idempotency = { execute: jest.fn() };
+  const streamPublisher = { publish: jest.fn() };
 
   const input = (overrides: Partial<CreateEventInput> = {}): CreateEventInput => ({
     eventType: EventType.BANK_ACCOUNT_CHANGE,
@@ -59,6 +62,7 @@ describe('EventsService', () => {
         { provide: PayloadValidator, useValue: { validate: jest.fn().mockResolvedValue(undefined) } },
         { provide: PayrollEventQueueService, useValue: eventQueue },
         { provide: IdempotencyService, useValue: idempotency },
+        { provide: EventStatusPublisher, useValue: streamPublisher },
       ],
     }).compile();
 
@@ -71,6 +75,14 @@ describe('EventsService', () => {
     prisma.payrollEvent.findFirst.mockReset();
     prisma.payrollEvent.findMany.mockReset();
     prisma.eventAttempt.findMany.mockReset();
+    // Default: the directory knows `emp-1` as an ACTIVE employee. Gate tests
+    // override this; everything else expects the pass-through path.
+    prisma.employee.findUnique.mockReset();
+    prisma.employee.findUnique.mockResolvedValue({
+      id: 'emp-row-1',
+      employeeNumber: 'emp-1',
+      active: true,
+    });
     eventQueue.enqueueBestEffort.mockReset();
     eventQueue.enqueueBestEffort.mockResolvedValue(undefined);
   });
@@ -123,6 +135,90 @@ describe('EventsService', () => {
 
       expect(result).toEqual({ httpStatus: 201, body: { id: 'evt-1', status: 'received' } });
       expect(tx.payrollEvent.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('employee directory gate (employee-directory, R1/R2)', () => {
+    it('looks the employeeId up on the tenant-qualified unique key and proceeds on an active employee', async () => {
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+      tx.payrollEvent.create.mockResolvedValue({ id: 'evt-gate-ok' });
+
+      const result = await service.createEvent(ORG, input());
+
+      expect(prisma.employee.findUnique).toHaveBeenCalledWith({
+        where: {
+          organizationId_employeeNumber: { organizationId: ORG, employeeNumber: 'emp-1' },
+        },
+        select: { active: true },
+      });
+      expect(result.httpStatus).toBe(201);
+      expect(idempotency.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an unknown employee with 422 before the idempotency layer is consulted', async () => {
+      prisma.employee.findUnique.mockResolvedValue(null);
+      // Log-line parity: the rejection log carries the context fields the
+      // events module convention requires (employeeId, eventType, organization,
+      // key) plus the validation stage — no eventId exists yet.
+      const warnSpy = jest.spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } }).logger,
+        'warn',
+      );
+
+      await expect(service.createEvent(ORG, input())).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('employeeId "emp-1" is unknown'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('validation stage=directory-gate'),
+      );
+
+      // A 422 is reported before the layer: the key was never handed to it.
+      expect(idempotency.execute).not.toHaveBeenCalled();
+      expect(tx.payrollEvent.create).not.toHaveBeenCalled();
+      expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
+      expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
+    });
+
+    it('rejects an archived employee with the same 422', async () => {
+      prisma.employee.findUnique.mockResolvedValue({ id: 'emp-row-1', active: false });
+
+      await expect(
+        service.createEvent(OTHER_ORG, input()),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(idempotency.execute).not.toHaveBeenCalled();
+    });
+
+    it('does not consume the Idempotency-Key: the same key creates a fresh event once the employee exists', async () => {
+      // Attempt 1 — the directory does not know the employee yet.
+      prisma.employee.findUnique.mockResolvedValueOnce(null);
+      await expect(service.createEvent(ORG, input())).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      expect(idempotency.execute).not.toHaveBeenCalled();
+
+      // The organization registers the employee; the SAME key resubmits.
+      prisma.employee.findUnique.mockResolvedValue({ id: 'e1', active: true });
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+      tx.payrollEvent.create.mockResolvedValue({ id: 'evt-after-register' });
+
+      const result = await service.createEvent(ORG, input());
+
+      expect(result).toEqual({
+        httpStatus: HttpStatus.CREATED,
+        body: { id: expect.any(String), status: 'received' },
+      });
+      // The layer ran exactly once for the one submission that got through —
+      // the rejected attempt stored no 422 response to replay.
+      expect(idempotency.execute).toHaveBeenCalledTimes(1);
+      expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -231,6 +327,65 @@ describe('EventsService', () => {
       expect(result.body).toEqual({ id: 'evt-2', status: 'received' });
       expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stream announcements (realtime-status, post-commit best-effort)', () => {
+    const persistedNewEvent = () => {
+      freshPath();
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.$queryRaw.mockResolvedValueOnce([{ max: 0n }]);
+      tx.payrollEvent.create.mockResolvedValue({ id: 'evt-stream' });
+    };
+
+    it('announces `queued` on the stream when the guarded mark-queued applied', async () => {
+      persistedNewEvent();
+
+      const result = await service.createEvent(ORG, input());
+
+      expect(streamPublisher.publish).toHaveBeenCalledWith({
+        organizationId: ORG,
+        eventId: result.body.id,
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 1,
+        status: 'queued',
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it('publishes nothing when the caller replays a stored response (no fresh transition)', async () => {
+      idempotency.execute.mockResolvedValue({
+        status: HttpStatus.CREATED,
+        body: { id: 'evt-1', status: 'received' },
+      });
+
+      await service.createEvent(ORG, input());
+
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
+    });
+
+    it('still returns 201 and publishes nothing when the mark-queued transition fails', async () => {
+      persistedNewEvent();
+      // The guarded write itself fails (Postgres hiccup): the row stays
+      // `received`, so there is no committed `queued` transition to announce —
+      // and the 201 must be untouched by the stream path (R2).
+      prisma.payrollEvent.updateMany.mockRejectedValue(new Error('connection reset'));
+
+      const result = await service.createEvent(ORG, input());
+
+      expect(result.httpStatus).toBe(201);
+      expect(tx.payrollEvent.create).toHaveBeenCalledTimes(1);
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
+    });
+
+    it('publishes nothing when another path already queued the row (count 0)', async () => {
+      persistedNewEvent();
+      prisma.payrollEvent.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.createEvent(ORG, input());
+
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
     });
   });
 
