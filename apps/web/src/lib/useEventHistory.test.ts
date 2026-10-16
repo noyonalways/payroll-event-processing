@@ -1,9 +1,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventType, type EventStatusNotification } from '@repo/shared';
 
 import { fetchEventStatus, fetchEventsPage, NetworkError } from '../api/events';
 import type { EventListItem, EventListResponse, EventStatusResponse } from './types';
 import { POLL_INTERVAL_MS, useEventHistory } from './useEventHistory';
+import type { UseEventStreamOptions } from './useEventStream';
 
 // The hook consumes the API layer; replace it with controllable spies.
 vi.mock('../api/events', async (importOriginal) => {
@@ -14,6 +16,20 @@ vi.mock('../api/events', async (importOriginal) => {
     fetchEventStatus: vi.fn(),
   };
 });
+
+// The stream subscription is replaced with a controllable fake: the test decides
+// whether the stream reports `connected` (live updates) or not (polling
+// fallback regime), and drives notifications through the captured handlers.
+const streamState = {
+  connected: false,
+  options: null as UseEventStreamOptions | null,
+};
+vi.mock('./useEventStream', () => ({
+  useEventStream: (options: UseEventStreamOptions) => {
+    streamState.options = options;
+    return { connected: streamState.connected };
+  },
+}));
 
 function entry(id: string, overrides: Partial<EventListItem> = {}): EventListItem {
   return {
@@ -65,6 +81,8 @@ beforeEach(() => {
   localStorage.clear();
   listMock.mockReset();
   statusMock.mockReset();
+  streamState.connected = false;
+  streamState.options = null;
 });
 
 afterEach(() => {
@@ -220,6 +238,9 @@ describe('useEventHistory', () => {
 });
 
 describe('useEventHistory row polling', () => {
+  // These tests run in the POLLING-FALLBACK regime: the stream fake reports
+  // disconnected, which is exactly the degraded mode the live updates degrade
+  // to (former fixed-cadence semantics, per-row error isolation).
   it('polls non-terminal rows, hydrates attempts, and stops once terminal is observed', async () => {
     vi.useFakeTimers();
     listMock.mockResolvedValue(page([entry('e-1'), entry('e-2', { status: 'failed' })]));
@@ -302,5 +323,118 @@ describe('useEventHistory row polling', () => {
       await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
     });
     expect(result.current.rows.find((r) => r.id === 'e-fail')?.error).toBeUndefined();
+  });
+});
+
+describe('useEventHistory over the event stream (live regime)', () => {
+  const notification = (
+    overrides: Partial<EventStatusNotification> = {},
+  ): EventStatusNotification => ({
+    organizationId: 'org-1',
+    eventId: 'e-1',
+    eventType: EventType.BANK_ACCOUNT_CHANGE,
+    employeeId: 'emp-1',
+    sequence: 1,
+    status: 'success',
+    occurredAt: '2026-10-16T10:00:00.000Z',
+    ...overrides,
+  });
+
+  const renderLive = async () => {
+    listMock.mockResolvedValue(page([entry('e-1')]));
+    const rendered = renderHook(() => useEventHistory());
+    // No `waitFor` under fake timers: one microtask flush settles the page.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(rendered.result.current.loading).toBe(false);
+    // The stream reports healthy AFTER the list is on screen.
+    streamState.connected = true;
+    await act(async () => {
+      rendered.rerender();
+    });
+    return rendered;
+  };
+
+  it('updates a row badge in place from a notification with no fixed-cadence polling', async () => {
+    vi.useFakeTimers();
+    const { result } = await renderLive();
+
+    // A non-terminal update exercises the pure-badge path (no hydration fetch).
+    act(() => {
+      streamState.options!.onNotification!(notification({ status: 'processing' }));
+    });
+    expect(result.current.rows.find((r) => r.id === 'e-1')?.status).toBe('processing');
+
+    // While the stream is healthy there is NO fixed-cadence polling.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    });
+    expect(statusMock).not.toHaveBeenCalled();
+  });
+
+  it('hydrates a terminal row exactly once (attempt count) and ignores repeats', async () => {
+    vi.useFakeTimers();
+    const { result } = await renderLive();
+    statusMock.mockResolvedValue(
+      statusResponse({
+        id: 'e-1',
+        status: 'success',
+        attempts: [
+          {
+            attemptNumber: 1,
+            status: 'SUCCESS',
+            errorType: null,
+            failedReason: null,
+            result: null,
+            createdAt: '2026-10-16T10:00:01.000Z',
+          },
+        ],
+      }),
+    );
+
+    act(() => {
+      streamState.options!.onNotification!(notification({ status: 'success' }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.rows.find((r) => r.id === 'e-1')?.attempts).toBe(1);
+    expect(statusMock).toHaveBeenCalledTimes(1);
+
+    // A repeat of the SAME terminal notification re-fetches nothing.
+    act(() => {
+      streamState.options!.onNotification!(notification({ status: 'success' }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(statusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a notification for an unlisted event adds no row', async () => {
+    const { result } = await renderLive();
+
+    act(() => {
+      streamState.options!.onNotification!(
+        notification({ eventId: 'evt-elsewhere', status: 'success' }),
+      );
+    });
+
+    expect(result.current.rows.map((r) => r.id)).toEqual(['e-1']);
+  });
+
+  it('re-synchronizes page one when the stream reconnects (onResync)', async () => {
+    const { result } = await renderLive();
+    const callsBefore = listMock.mock.calls.length;
+
+    // The gap is closed by a fresh page-one fetch for the CURRENT filters.
+    await act(async () => {
+      streamState.options!.onResync?.();
+    });
+    expect(listMock.mock.calls.length).toBe(callsBefore + 1);
+    expect(listMock).toHaveBeenLastCalledWith({ limit: 20 });
+    expect(result.current.rows.map((r) => r.id)).toEqual(['e-1']);
   });
 });

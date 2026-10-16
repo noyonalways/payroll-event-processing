@@ -8,6 +8,7 @@ import { PayrollEventQueueModule } from '../queue/payroll-event-queue.module';
 import { ProcessingModule } from '../processing/processing.module';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
+import { EventStatusPublisherModule } from '../events/event-status-publisher.module';
 
 @Module({
   imports: [
@@ -55,6 +56,9 @@ import { PayrollEventProcessor } from './payroll-event.processor';
     // and the producer into this module, so the worker must import it again.
     PayrollEventQueueModule,
     ProcessingModule,
+    // The worker's processor announces committed transitions on the
+    // event-status-stream (realtime-status design D3).
+    EventStatusPublisherModule,
   ],
   providers: [PayrollEventProcessor, HeartbeatService],
 })

@@ -18,7 +18,8 @@
     "validate": "prisma validate --schema=prisma/schema.prisma",
     "migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
     "migrate:status": "prisma migrate status --schema=prisma/schema.prisma",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "jest"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.5",
@@ -26,7 +27,8 @@
     "@nestjs/config": "^4.0.0",
     "@prisma/client": "^6.0.0",
     "@repo/shared": "workspace:*",
-    "bullmq": "^5.81.3"
+    "bullmq": "^5.81.3",
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -34,6 +36,26 @@
     "typescript": "^5.7.0",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
-    "eslint": "^9.0.0"
+    "@types/jest": "^29.5.14",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": ".",
+    "testRegex": "src/.*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "src/**/*.(t|j)s"
+    ],
+    "coverageDirectory": "coverage",
+    "testEnvironment": "node"
   }
 }

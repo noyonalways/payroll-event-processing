@@ -5,6 +5,7 @@ import { PAYROLL_EVENT_JOB, EventType, TransientPayrollFailureError } from '@rep
 import { EventStatus } from '@prisma/client';
 import { EventClaim } from '../processing/event-claim';
 import { HeartbeatService } from '../processing/heartbeat.service';
+import { EventStatusPublisher } from '../events/event-status.publisher';
 import { ConfigService } from '@nestjs/config';
 
 const ORG = 'org-a';
@@ -13,7 +14,7 @@ const OTHER_ORG = 'org-b';
 /**
  * Direct-instantiation unit tests. The processor must not touch `WorkerHost.worker`
  * at construction (BullRegistrar only populates it during Nest's onModuleInit), so
- * `new PayrollEventProcessor(prisma, queueService, config, eventClaim, heartbeat)`
+ * `new PayrollEventProcessor(prisma, queueService, config, eventClaim, heartbeat, streamPublisher)`
  * below is safe in isolation.
  *
  * The claim → dispatch → terminal-write lifecycle is DELEGATED to `EventClaim`
@@ -54,6 +55,7 @@ describe('PayrollEventProcessor', () => {
   };
   const eventClaim = { claimAndProcess: jest.fn() };
   const heartbeat = { touch: jest.fn() };
+  const streamPublisher = { publish: jest.fn() };
 
   const job = (
     overrides: Record<string, unknown> = {},
@@ -83,6 +85,7 @@ describe('PayrollEventProcessor', () => {
       configService as unknown as ConfigService,
       eventClaim as unknown as EventClaim,
       heartbeat as unknown as HeartbeatService,
+      streamPublisher as unknown as EventStatusPublisher,
     );
     // Delegate the transactional lifecycle to EventClaim; default = success.
     eventClaim.claimAndProcess.mockResolvedValue({
@@ -140,6 +143,162 @@ describe('PayrollEventProcessor', () => {
       );
       expect(succeeded).toBeDefined();
       expect(String(succeeded![0])).toContain('reference SIM-test-ref');
+    });
+  });
+
+  // ── Stream announcements (realtime-status design D3) ──────────────────────
+
+  describe('stream announcements (post-commit, best-effort)', () => {
+    const announced = (index?: number): Record<string, unknown> => {
+      const calls = streamPublisher.publish.mock.calls;
+      return calls[index ?? calls.length - 1][0] as Record<string, unknown>;
+    };
+
+    it('announces `queued` when the make-safe transition applied', async () => {
+      await processor.process(job());
+
+      expect(streamPublisher.publish).toHaveBeenCalledWith({
+        organizationId: ORG,
+        eventId: 'evt-1',
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 1,
+        status: 'queued',
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it('announces nothing for `queued` when the row was already queued (count 0)', async () => {
+      prisma.payrollEvent.updateMany.mockResolvedValue({ count: 0 });
+
+      await processor.process(job());
+
+      // The make-safe found nothing to do, so no `queued` announcement — the
+      // committed `success` outcome is still announced by its own path.
+      const statuses = streamPublisher.publish.mock.calls.map(
+        (c) => (c[0] as { status: string }).status,
+      );
+      expect(statuses).toEqual(['success']);
+    });
+
+    it('announces the committed `success` outcome', async () => {
+      await processor.process(job());
+
+      // The make-safe's `queued` came first; the terminal announcement is the
+      // latest one and carries the committed state with full identity.
+      const announcement = announced() as { status: string };
+      expect(streamPublisher.publish).toHaveBeenCalledTimes(2);
+      expect(announcement).toEqual(
+        expect.objectContaining({
+          organizationId: ORG,
+          eventId: 'evt-1',
+          status: 'success',
+        }),
+      );
+    });
+
+    it('announces the committed terminal `failed` on permanent failure', async () => {
+      eventClaim.claimAndProcess.mockResolvedValue({
+        outcome: 'permanent-failure',
+        reason: 'business rejection',
+      });
+
+      await processor.process(job());
+
+      expect(streamPublisher.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: 'evt-1', status: 'failed' }),
+      );
+    });
+
+    it('announces nothing on a stale/duplicate (skipped) job', async () => {
+      eventClaim.claimAndProcess.mockResolvedValue({ outcome: 'skipped' });
+      // Default: the make-safe found the row already queued (count 0).
+      prisma.payrollEvent.updateMany.mockResolvedValue({ count: 0 });
+
+      await processor.process(job());
+
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
+    });
+
+    it('announces nothing when the claim transaction aborted transiently (nothing committed)', async () => {
+      eventClaim.claimAndProcess.mockRejectedValue(
+        new TransientPayrollFailureError('simulated down'),
+      );
+
+      await expect(processor.process(job())).rejects.toBeInstanceOf(
+        TransientPayrollFailureError,
+      );
+
+      const statuses = streamPublisher.publish.mock.calls.map(
+        (c) => (c[0] as { status: string }).status,
+      );
+      // Only the make-safe's `queued` announcement may exist — never the
+      // rolled-back claim's `processing`, and no terminal state.
+      expect(statuses).toEqual(['queued']);
+    });
+
+    it('announces `failed` from the exhausted-retry handler after its transaction commits', async () => {
+      await processor.onFailed(
+        {
+          name: PAYROLL_EVENT_JOB,
+          data: {
+            eventId: 'evt-x',
+            organizationId: ORG,
+            employeeId: 'emp-x',
+            eventType: EventType.SALARY_CHANGE,
+            sequence: 3,
+          },
+          attemptsMade: 5,
+          opts: { attempts: 5 },
+        } as never,
+        new TransientPayrollFailureError('down'),
+      );
+
+      expect(streamPublisher.publish).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organizationId: ORG,
+          eventId: 'evt-x',
+          eventType: EventType.SALARY_CHANGE,
+          employeeId: 'emp-x',
+          sequence: 3,
+          status: 'failed',
+        }),
+      );
+    });
+
+    it('announces nothing for a mid-retry failure or a foreign job name (no transition committed)', async () => {
+      await processor.onFailed(
+        {
+          name: PAYROLL_EVENT_JOB,
+          data: {
+            eventId: 'evt-y',
+            organizationId: ORG,
+            employeeId: 'emp-y',
+            eventType: EventType.ADDRESS_CHANGE,
+            sequence: 1,
+          },
+          attemptsMade: 2,
+          opts: { attempts: 5 },
+        } as never,
+        new TransientPayrollFailureError('down'),
+      );
+      await processor.onFailed(
+        {
+          name: 'some-other-job',
+          data: {
+            eventId: 'evt-z',
+            organizationId: ORG,
+            employeeId: 'emp-z',
+            eventType: EventType.ADDRESS_CHANGE,
+            sequence: 1,
+          },
+          attemptsMade: 5,
+          opts: { attempts: 5 },
+        } as never,
+        new Error('down'),
+      );
+
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
     });
   });
 

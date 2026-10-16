@@ -9,6 +9,7 @@ import {
   ApiError,
   NetworkError,
   SessionExpiredError,
+  fetchAuthorized,
   request,
 } from './client';
 import { submitEvent } from './events';
@@ -231,6 +232,55 @@ describe('request (authenticated client)', () => {
       SessionExpiredError,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchAuthorized (raw streaming response, realtime-status)', () => {
+  it('returns the raw Response with the Authorization header attached', async () => {
+    setSession(sessionResponse());
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+
+    const res = await fetchAuthorized(`${API_BASE_URL}/events/stream`);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${API_BASE_URL}/events/stream`);
+    expect(headersOf(init).Authorization).toBe('Bearer access-1');
+    expect(res.ok).toBe(true);
+    // The body is NOT parsed away: the caller stream-consumes it.
+    expect(res.body).not.toBeNull();
+  });
+
+  it('refreshes once on a 401 and replays with the rotated token', async () => {
+    setSession(sessionResponse());
+    fetchMock
+      .mockResolvedValueOnce(unauthorized())
+      .mockResolvedValueOnce(
+        jsonResponse(sessionResponse({ accessToken: 'access-2', refreshToken: 'refresh-2' })),
+      )
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    const res = await fetchAuthorized(`${API_BASE_URL}/events/stream`);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(res.ok).toBe(true);
+    const [retryUrl, retryInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(retryUrl).toBe(`${API_BASE_URL}/events/stream`);
+    expect(headersOf(retryInit).Authorization).toBe('Bearer access-2');
+  });
+
+  it('normalizes a structured error after the refresh replay', async () => {
+    setSession(sessionResponse());
+    fetchMock
+      .mockResolvedValueOnce(unauthorized())
+      .mockResolvedValueOnce(
+        jsonResponse(sessionResponse({ accessToken: 'access-2', refreshToken: 'refresh-2' })),
+      )
+      .mockResolvedValueOnce(unauthorized());
+
+    await expect(fetchAuthorized(`${API_BASE_URL}/events/stream`)).rejects.toBeInstanceOf(
+      ApiError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 

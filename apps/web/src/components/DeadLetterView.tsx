@@ -115,7 +115,7 @@ export function DeadLetterView() {
 
         <div>
           {selected ? (
-            <EventDetail entry={selected} />
+            <EventDetail entry={selected} live={dead.streamConnected} />
           ) : (
             <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
               Select a failed event to inspect its failure trail before

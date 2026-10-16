@@ -46,7 +46,9 @@ HTTP request returns within milliseconds — it never blocks on processing work.
 
 Event submission → authenticate → validate → idempotency check → persist → enqueue → fast `201` response.
 A separate worker picks events off a queue, runs a *simulated* external payroll operation
-(which occasionally fails), and records the outcome. Clients track progress through
+(which occasionally fails), and — on success — commits the change as **effective-dated employee
+state** (compensation, bank account, address, department) in the same transaction that closes
+the event, so processing produces durable business effects, not just acknowledgements. Clients track progress through
 read-only endpoints — `GET /events` (the paginated, filterable history) and
 `GET /events/{id}` (full status + attempt trail) — or the demo UI, which pages the former
 and polls the latter.
@@ -66,7 +68,9 @@ caller's organization comes from a signed access token, never from the request. 
 
 > Adding a new event type is a drop-in: new enum member + payload DTO + handler, each registered in
 > one line (`PayloadDtoRegistry`, `HandlerRegistry`). No schema migration (payload is JSONB), no
-> controller/service/worker changes.
+> controller/service/worker changes. A domain-affecting type additionally declares its `DomainKind`
+> in its handler (schema enum + one call to the `EmployeeDomainStateWriter`) so its success
+> persists effective-dated state.
 
 Event lifecycle: `received → queued → processing → success | failed`, plus `cancelled` — a manual terminal state reachable only from the pending states through the recovery actions (with a per-attempt audit trail and an append-only action audit).
 
@@ -82,6 +86,7 @@ Event lifecycle: `received → queued → processing → success | failed`, plus
 | `POST /events` | `Authorization: Bearer <accessToken>` | Submit an event. Also requires the `Idempotency-Key` header. Returns `201` with the stored response (duplicates replay it). |
 | `GET /events` | `Authorization: Bearer <accessToken>` | Read-only paginated event history: one page of the organization's events, newest first (`created_at DESC, id DESC`) as `{ data, nextCursor, limit }`. Combinable filters — `status`, `eventType`, `employeeId`, `createdAfter`/`createdBefore` (inclusive) — AND together and compose with the keyset cursor: pass a page's `nextCursor` back as `cursor` to keep walking without page shifts. Rows carry no payload, result, or attempts (that is `GET /events/:id`). `400` for invalid filter values, an out-of-range `limit` (1–100), or an unparsable cursor. |
 | `GET /events/:id` | `Authorization: Bearer <accessToken>` | Read-only event status: committed lifecycle state, details, and the attempt history (one row per attempt). `404` for unknown ids **and for an event belonging to another organization** — the two are indistinguishable. |
+| `GET /events/stream` | `Authorization: Bearer <accessToken>` | Server-sent events: one JSON notification per committed lifecycle transition (`queued`, `success`, `failed`, `cancelled`, ...) of the caller's organization, with heartbeat comment lines. Best-effort delivery — the read endpoints stay the source of truth and a reconnecting client re-synchronizes through them (nothing is replayed). Consumed with `fetch` + `Authorization` (not `EventSource`). |
 | `POST /events/:id/retry` | `Authorization: Bearer <accessToken>` | Manual recovery: move a terminal `failed` event back to `queued` and schedule it again on its employee's chain. Attempt numbering is continuous across retry rounds (the trail keeps one row per attempt). `409` for any other lifecycle state, `404` for unknown/foreign ids. The action is effective even when Redis is unreachable (the relay schedules it later). |
 | `POST /events/:id/cancel` | `Authorization: Bearer <accessToken>` | Manual recovery: cancel a pending (`received`/`queued`) event. `cancelled` is terminal — a job that later surfaces for it is a no-op, and the employee's chain keeps draining behind it. `409` for any other state, `404` for unknown/foreign ids. |
 | `GET /health` | public | Service health: DB + Redis reachability, worker liveness heartbeats, BullMQ stalled-job count. Always `200`; the body carries `status: ok \| degraded`. |
@@ -262,9 +267,9 @@ Tear everything down with `docker compose down` (add `-v` to also drop the `pgda
 | **HTTP API app** (`apps/api/`) | Entrypoint (`main.ts`) bootstrapping the composition root from `@repo/core`: global deny-by-default `JwtAuthGuard`; DTO validation (class-validator), per-type payload rules, the shared idempotency layer, persist + enqueue, read-only status, `/health`. |
 | **Auth & tenancy** (`packages/core/src/auth/`) | Registration/login/refresh/logout, scrypt password hashing, and the guard that resolves the caller's organization from the signed access token; tenant-scoped queries take that organization as a required argument. |
 | **Redis / BullMQ** | `payroll-events` job queue. The tenant-qualified `jobId = <organizationId>\|<employeeId>` makes it FIFO per employee *within an organization* while other employees run in parallel. Delayed jobs implement backoff; stalled-job detection recovers crashed workers. |
-| **Worker app** (`apps/worker/`) | Consumer entrypoint bootstrapping the worker composition root from `@repo/core`: claims a job, takes the DB row lock inside a single transaction, dispatches to the per-type handler, and commits the terminal state + audit row atomically — every statement scoped by the job's organization. |
-| **PostgreSQL / Prisma** (`packages/database/`) | Ground truth for identity, event state, idempotency, attempt history, and worker liveness. Unique constraints + the row lock make the guarantees hold even with multiple workers; tenant-qualified unique keys keep two organizations' data independent. |
-| **Simulated provider** (`packages/core/src/processing/`) | Fake external payroll call with env-tunable transient/permanent failure rates; deterministic `EMP-DEMO-*` scenarios for review demos. |
+| **Worker app** (`apps/worker/`) | Consumer entrypoint bootstrapping the worker composition root from `@repo/core`: claims a job, takes the DB row lock inside a single transaction, dispatches to the per-type handler, and commits the terminal state + audit row + the event's effective-dated domain-state row atomically — every statement scoped by the job's organization. |
+| **PostgreSQL / Prisma** (`packages/database/`) | Ground truth for identity, event state, idempotency, attempt history, effective-dated employee state, and worker liveness. Unique constraints + the row lock make the guarantees hold even with multiple workers; tenant-qualified unique keys keep two organizations' data independent. |
+| **Simulated provider** (`packages/core/src/processing/`) | Fake external payroll call with env-tunable transient/permanent failure rates; deterministic `EMP-DEMO-*` scenarios for review demos. A **successful** simulated call is what licenses the handler's domain-state write — failures leave zero state behind. |
 | **Demo UI** (`apps/web/`) | React + Vite two-pane app: sign in (or register an organization), submit an event, browse the organization's server-driven history (`GET /events`: filters, load-more paging) with live status polling on in-flight rows, inspect detail + failure trail. Imports the event-type contract and the error-body shape from `@repo/shared`. |
 
 Interactive diagrams (ERD, event flow, lifecycle state machine, system architecture) are
@@ -369,6 +374,7 @@ host URL, and a run that needs a different database overrides it through the env
 | `PAYROLL_WORKER_MAX_STALLED_COUNT` | `1` | Times a stalled job is re-queued before being failed. |
 | `WORKER_HEARTBEAT_INTERVAL_MS` | `5000` | Worker liveness upsert cadence into `worker_heartbeats`. |
 | `HEALTH_WORKER_STALE_MS` | `15000` | `/health` marks a worker stale when its heartbeat is older than this. |
+| `EVENT_STREAM_HEARTBEAT_INTERVAL_MS` | `15000` | Heartbeat comment cadence for open `GET /events/stream` connections — the liveness signal clients time out against. |
 | `WORKER_ID` | *(none)* | Optional stable worker id; defaults to `${hostname}:${pid}`. |
 | `AUTH_JWT_SECRET` | *(none — **required**, min 32 chars)* | HMAC-SHA256 key signing access tokens. Validated at boot: the app **fails fast** when it is missing or shorter than 32 characters, so it can never run with an empty or guessable signing key. Generate with `openssl rand -base64 48`. |
 | `AUTH_ACCESS_TOKEN_TTL` | `15m` | Access-token lifetime. Access tokens are stateless, so expiry is the only revocation that applies to them — keep it short. |
@@ -379,9 +385,10 @@ host URL, and a run that needs a different database overrides it through the env
 ## Database setup & migrations
 
 All schema changes live in `packages/database/prisma/migrations/` and are applied with Prisma
-Migrate. Eight tables: `payroll_events`, `idempotency_records`, `event_attempts`,
-`worker_heartbeats`, plus the tenancy/identity tables `organizations`, `users`, `memberships`,
-and `refresh_tokens` (see [Database design](#database-design)).
+Migrate. Eleven tables: `payroll_events`, `idempotency_records`, `event_attempts`,
+`event_actions`, `employee_domain_state`, `worker_heartbeats`, plus the tenancy/identity tables
+`organizations`, `users`, `memberships`, and `refresh_tokens` and the `employees` directory
+(see [Database design](#database-design)).
 
 ```bash
 # Apply all pending migrations (idempotent; safe on any environment, incl. CI)
@@ -507,9 +514,9 @@ Details: `packages/shared/src/demo-scenarios.ts` (the mapping) and `apps/web/REA
 
 | Suite | Command | Size | What it covers |
 |---|---|---|---|
-| Backend unit (Jest) | `pnpm test` | 233 tests, 21 suites | DTO validation (including the list query parameters), auth services + guard, idempotency service, queue producer, provider failure logic, the transactional claim, handlers, health, and the events service reads (status + the tenant-scoped, cursor-paginated history query). |
-| E2E (Jest + supertest, real Postgres + Redis) | `pnpm test:e2e` | 83 tests, 11 suites | Full flows: register → submit → idempotent replay, queue, processing, retry/exhaustion, crash recovery, `/health`, status API, the event-history API (pagination walk, filter composition, cross-tenant blindness, pagination stability, malformed cursor/limit), and cross-organization isolation (`apps/api/test/tenant-isolation.e2e-spec.ts`). |
-| Frontend (Vitest) | `pnpm --filter @repo/web test:run` | 84 tests | Sign-in/registration, session persistence, submit-form behavior, scenario mapping, event-type contract, and the server-driven history hook (filter re-fetches, load-more cursor walks, row polling). |
+| Backend unit (Jest) | `pnpm test` | 242 tests, 22 suites | DTO validation (including the list query parameters), auth services + guard, idempotency service, queue producer, provider failure logic, the transactional claim (now returning the live transaction client), handlers (persisting their domain state), the domain-state writer, health, and the events service reads (status + the tenant-scoped, cursor-paginated history query). |
+| E2E (Jest + supertest, real Postgres + Redis) | `pnpm test:e2e` | 101 tests, 15 suites | Full flows: register → submit → idempotent replay, queue, processing, retry/exhaustion, crash recovery, `/health`, status API, the event-history API (pagination walk, filter composition, cross-tenant blindness, pagination stability, malformed cursor/limit), and cross-organization isolation (`apps/api/test/tenant-isolation.e2e-spec.ts`), plus the domain-state flow — one row per success, none for failures, exactly-once under concurrent claims (`apps/api/test/domain-state.e2e-spec.ts`). |
+| Frontend (Vitest) | `pnpm --filter @repo/web test:run` | 103 tests | Sign-in/registration, session persistence, submit-form behavior, scenario mapping, event-type contract, and the server-driven history hook (filter re-fetches, load-more cursor walks, row polling). |
 
 All three run from the workspace root as `turbo run` wrappers — `pnpm lint`, `pnpm typecheck`,
 `pnpm test`, `pnpm build`, `pnpm test:e2e` — dependency-ordered and cached (except `test:e2e`,
@@ -593,6 +600,19 @@ attempt's row is upserted atomically with `queued → failed`. `event_id` carrie
 key to `payroll_events` (`ON DELETE CASCADE`), so the trail cannot be orphaned and deleting an
 organization cleans its attempts up.
 
+**`employee_domain_state`** — the effective-dated business state a successful event applies
+(domain-effects): one append-only row per **successful** event — `organization_id`, tenant-local
+`employee_id` (same convention as `payroll_events`; deliberately no FK to the `employees`
+directory, so the timeline is never rewritten when the directory evolves), a `DomainKind`
+(`COMPENSATION` | `BANK_ACCOUNT` | `ADDRESS` | `DEPARTMENT`), the applied fields as JSONB `value`,
+the payload's `effective_date`, and `source_event_id` with `UNIQUE` — the store-level
+exactly-once arbiter: one row per event is unrepresentable to violate. The write commits inside
+the task's single claim transaction (terminal transition + attempt row + state row atomically), so
+a transient failure, a crash, or a permanent rejection leaves **zero** state rows; a retried
+attempt that eventually succeeds leaves exactly one. The timeline per
+`(organization_id, employee_id, domain)` is indexed newest-effective-first: the current state as
+of any date is the first row whose `effective_date` is not after it (commit order breaks ties).
+
 **`worker_heartbeats`** — worker liveness for `/health`: `worker_id` (PK), `hostname`,
 `started_at`, `last_seen_at`, upserted every `WORKER_HEARTBEAT_INTERVAL_MS`. Deliberately not
 tenant-scoped: the worker fleet is shared infrastructure serving every organization.
@@ -617,7 +637,8 @@ each are in `docs/architecture.md`; the shape:
 2. **Transactional claim** — `process()` runs one interactive Prisma transaction: `SELECT …
    FOR UPDATE` on the event row, a guarded `UPDATE … SET status='processing' WHERE status='queued'`
    (0 rows → stale/duplicate, skip), payload read, handler dispatch, then the terminal
-   transition + `event_attempts` row committed together. Every statement is scoped by the event's
+   transition + the attempt row + (on success) the event's effective-dated `employee_domain_state`
+   row committed together. Every statement is scoped by the event's
    `(id, organization_id)`, taken from the job data, so a forged or corrupt job naming a valid
    foreign event id can never lock or mutate another tenant's row. A transient handler failure
    re-throws inside the transaction, so it **aborts** and the claim rolls back to `queued` —

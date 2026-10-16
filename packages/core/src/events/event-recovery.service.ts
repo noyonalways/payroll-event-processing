@@ -1,7 +1,9 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventStatus } from '@prisma/client';
 import { PrismaService } from '@repo/database';
+import { EventType } from '@repo/shared';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
+import { EventStatusPublisher } from './event-status.publisher';
 import { EventActionResponseDto } from './dto/event-action-response.dto';
 
 /**
@@ -36,6 +38,7 @@ export class EventRecoveryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventQueue: PayrollEventQueueService,
+    private readonly streamPublisher: EventStatusPublisher,
   ) {}
 
   /**
@@ -97,6 +100,23 @@ export class EventRecoveryService {
       return base;
     });
 
+    // Post-commit stream announcement (realtime-status design D3): the guarded
+    // `failed → queued` transition has committed — announce `queued`
+    // fire-and-forget (a stream failure can never reach the already-committed
+    // action, R2), then best-effort enqueue the fresh job.
+    this.streamPublisher.publish({
+      organizationId,
+      eventId: id,
+      // The stored column is a plain string; every persisted value is a
+      // registry-supported event type (the payload validator enforces it), so
+      // the notification wire type reclaims the enum at the boundary.
+      eventType: row.eventType as EventType,
+      employeeId: row.employeeId,
+      sequence: Number(row.sequence),
+      status: 'queued',
+      occurredAt: new Date().toISOString(),
+    });
+
     // Best-effort, POST-commit (R2): the row is `queued` either way; a timed-out
     // or suppressed add is recovered by the employee's relay. attemptBase rides
     // the fresh job when the add lands (D4); the relay path re-reads the row.
@@ -143,7 +163,7 @@ export class EventRecoveryService {
     actorId: string,
   ): Promise<EventActionResponseDto> {    const row = await this.prisma.payrollEvent.findFirst({
       where: { id, organizationId },
-      select: { id: true, eventType: true, employeeId: true, status: true },
+      select: { id: true, eventType: true, employeeId: true, sequence: true, status: true },
     });
     if (!row) {
       throw new NotFoundException(`Event with id ${id} not found`);
@@ -174,6 +194,19 @@ export class EventRecoveryService {
       await tx.eventAction.create({
         data: { eventId: id, action: 'CANCEL', userId: actorId },
       });
+    });
+
+    // Post-commit stream announcement (realtime-status design D3): the guarded
+    // transition to the terminal `cancelled` state has committed. Cancel never
+    // touches the queue, so this is the only announcement the action emits.
+    this.streamPublisher.publish({
+      organizationId,
+      eventId: id,
+      eventType: row.eventType as EventType,
+      employeeId: row.employeeId,
+      sequence: Number(row.sequence),
+      status: 'cancelled',
+      occurredAt: new Date().toISOString(),
     });
 
     this.logger.log(

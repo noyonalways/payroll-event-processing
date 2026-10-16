@@ -2,8 +2,10 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventStatus } from '@prisma/client';
 import { EventRecoveryService } from './event-recovery.service';
+import { EventStatusPublisher } from './event-status.publisher';
 import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
+import { EventType } from '@repo/shared';
 
 const ORG = 'org-a';
 
@@ -27,10 +29,11 @@ describe('EventRecoveryService', () => {
     $transaction: jest.fn(),
   };
   const eventQueue = { enqueueBestEffort: jest.fn() };
+  const streamPublisher = { publish: jest.fn() };
 
   const failedRow = {
     id: 'evt-1',
-    eventType: 'SALARY_CHANGE',
+    eventType: EventType.SALARY_CHANGE,
     employeeId: 'emp-1',
     sequence: 3n,
     status: EventStatus.FAILED,
@@ -57,6 +60,7 @@ describe('EventRecoveryService', () => {
         EventRecoveryService,
         { provide: PrismaService, useValue: prisma },
         { provide: PayrollEventQueueService, useValue: eventQueue },
+        { provide: EventStatusPublisher, useValue: streamPublisher },
       ],
     }).compile();
 
@@ -79,7 +83,7 @@ describe('EventRecoveryService', () => {
       expect(result).toEqual({
         id: 'evt-1',
         status: 'queued',
-        eventType: 'SALARY_CHANGE',
+        eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
       });
 
@@ -99,12 +103,24 @@ describe('EventRecoveryService', () => {
         data: { eventId: 'evt-1', action: 'RETRY', userId: 'user-1' },
       });
 
+      // Post-commit stream announcement (realtime-status): the committed
+      // `queued` transition is announced fire-and-forget with full identity.
+      expect(streamPublisher.publish).toHaveBeenCalledWith({
+        organizationId: ORG,
+        eventId: 'evt-1',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 3,
+        status: 'queued',
+        occurredAt: expect.any(String),
+      });
+
       // Post-commit best-effort enqueue, carrying identity AND the round base
       // so the fresh job numbers its attempts after the recorded trail.
       expect(eventQueue.enqueueBestEffort).toHaveBeenCalledWith({
         eventId: 'evt-1',
         organizationId: ORG,
-        eventType: 'SALARY_CHANGE',
+        eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
         sequence: 3,
         attemptBase: 2,
@@ -137,6 +153,7 @@ describe('EventRecoveryService', () => {
       expect(prisma.payrollEvent.updateMany).not.toHaveBeenCalled();
       expect(prisma.eventAction.create).not.toHaveBeenCalled();
       expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
     });
 
     it('409s a non-failed event — queued, success, cancelled, received — and leaves it unchanged', async () => {
@@ -169,9 +186,11 @@ describe('EventRecoveryService', () => {
       );
 
       // The audit row is INSIDE the transaction whose guard matched nothing —
-      // the rollback means no audit row exists for the rejected call (D6).
+      // the rollback means no audit row exists for the rejected call (D6),
+      // and the publish after the transaction never runs.
       expect(prisma.eventAction.create).not.toHaveBeenCalled();
       expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
+      expect(streamPublisher.publish).not.toHaveBeenCalled();
     });
 
     it('still resolves when the queue is unreachable (best-effort enqueue)', async () => {
@@ -196,7 +215,7 @@ describe('EventRecoveryService', () => {
       expect(result).toEqual({
         id: 'evt-1',
         status: 'cancelled',
-        eventType: 'SALARY_CHANGE',
+        eventType: EventType.SALARY_CHANGE,
         employeeId: 'emp-1',
       });
       expect(prisma.payrollEvent.updateMany).toHaveBeenCalledWith({
@@ -213,6 +232,17 @@ describe('EventRecoveryService', () => {
       // A cancel is pure state: no job add, no removal — the guarded claim
       // makes any surfaced job a no-op (design D5).
       expect(eventQueue.enqueueBestEffort).not.toHaveBeenCalled();
+      // Post-commit stream announcement (realtime-status): the terminal
+      // `cancelled` state is announced with the row identity.
+      expect(streamPublisher.publish).toHaveBeenCalledWith({
+        organizationId: ORG,
+        eventId: 'evt-1',
+        eventType: EventType.SALARY_CHANGE,
+        employeeId: 'emp-1',
+        sequence: 3,
+        status: 'cancelled',
+        occurredAt: expect.any(String),
+      });
     });
 
     it('cancels a stranded received row', async () => {

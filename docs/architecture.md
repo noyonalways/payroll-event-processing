@@ -32,6 +32,11 @@
 >   (`created_at DESC, id DESC` cursor), combinable validated filters, tenant-scoped by the
 >   token's organization; the measured composite index behind it (§7.3a); the web UI's
 >   history view replaces the localStorage tracked list (§7.3a).
+> - Change 15 (`realtime-status`) ✅ — `GET /events/stream`: authenticated, tenant-scoped
+>   SSE of committed lifecycle transitions; cross-process fan-out over Redis pub/sub
+>   from post-commit publish sites in BOTH processes (API + worker; §7.5); best-effort
+>   delivery with the read endpoints as the resynchronization path; the web UI updates
+>   badges live and degrades to the former fixed-cadence polling while the stream is down.
 >
 > **Scope:** Full-system architecture + visual flows (roadmap changes 2–12; the workspace
 > conversion is recorded in `openspec/changes/turborepo-workspace`).
@@ -154,9 +159,9 @@ POST /events ─────►  received  ───────────► 
 |---|---|---|
 | `received` → `queued` | job enqueued after successful persist | transaction committed |
 | `queued` → `processing` | worker claims job (inside the interactive tx, after `SELECT … FOR UPDATE`) | `UPDATE … WHERE status='queued'` must match 1 row; count 0 → skip |
-| `processing` → `success` | provider call succeeded | transaction commits `processing→success` + result/processed_at + SUCCESS attempt row together |
+| `processing` → `success` | provider call succeeded | transaction commits `processing→success` + result/processed_at + SUCCESS attempt row + exactly one `employee_domain_state` row (the applied change) together |
 | `processing` → `queued` | transient failure (retry) | **tx ABORT — no explicit reset write**: the re-throw rolls the claim back |
-| `processing` → `failed` | permanent failure | transaction commits `processing→failed` + FAILED(PERMANENT) attempt row together |
+| `processing` → `failed` | permanent failure | transaction commits `processing→failed` + FAILED(PERMANENT) attempt row together; zero `employee_domain_state` rows exist (state only ever rides a success) |
 | `queued` → `failed` | retries exhausted (transient) | `onFailed` array transaction commits `queued→failed` + upserts the final attempt's FAILED(TEMPORARY) row (already appended by the last transient failure) |
 | `received|queued` → `cancelled` | **manual recovery action** `POST /events/:id/cancel` | guarded transition + the `event_actions` audit row commit together; no processing attempt is recorded for the cancellation |
 | `failed` → `queued` | **manual recovery action** `POST /events/:id/retry` | guarded transition sets `attempt_base = MAX(attempt_number)` (numbering continues across rounds) + the audit row, in one transaction; re-enqueued best-effort like a submission |
@@ -192,7 +197,7 @@ Each requirement mapped to its enforcement point.
 - **Enforced in:** worker + BullMQ config (env-tunable `PAYROLL_WORKER_*`), `HeartbeatService`, `/health` (`workers[]`/`stalled`).
 
 ### R5 — Exactly-once / processing consistency
-- The terminal write is **transactional**: `event → success/failed` + the `event_attempts` row commit in the SAME transaction as the guarded claim — the row lock means exactly one worker holds the claim, so the handler result applied exactly once.
+- The terminal write is **transactional**: `event → success/failed` + the `event_attempts` row commit in the SAME transaction as the guarded claim — the row lock means exactly one worker holds the claim, so the handler result applied exactly once. Since **domain-effects**, a successful handler also appends the event's effective-dated `employee_domain_state` row through that same transaction client — the state write commits (or aborts) with everything else, so no crash, retry, or permanent failure can leave state without `success` or `success` without state.
 - The update is guarded: `UPDATE payroll_events SET status='success' WHERE id=? AND status='processing'` — a crash-then-reprocess can only succeed once; the second attempt matches 0 rows and is skipped.
 - Retry exhaustion writes `queued → failed` + the final FAILED(TEMPORARY) attempt row (upserted — the last transient failure already appended it) in one array `$transaction`.
 - **Enforced in:** transactional `event-claim.ts` + status guard + `onFailed` exhaustion transaction.
@@ -203,7 +208,7 @@ Each requirement mapped to its enforcement point.
 - **Enforced in:** API persist (sequence) + queue producer (tenant-qualified `jobId`).
 
 ### R7 — Extensibility
-- Handler strategy registry: `Map<EventType, PayrollHandler>`; a new event type = new DTO + new handler registered, no controller/service change.
+- Handler strategy registry: `Map<EventType, PayrollHandler>`; a new event type = new DTO + new handler registered, no controller/service change. A domain-affecting type additionally declares its `DomainKind` in its handler and calls `EmployeeDomainStateWriter.record(tx, …)` after the provider succeeds (schema enum extension + one append), keeping domain effects inside the handler's strategy boundary (domain-effects D3).
 - DTOs are per-type with their own required fields (see README table).
 - **Enforced in:** `packages/core/src/processing/handlers` registry.
 
@@ -264,6 +269,21 @@ See the **ERD** in eraser.io. Eight tables: four for payroll processing, four fo
 | `result` | JSONB nullable | provider result on success (== the event row's `result`) |
 | `created_at` | timestamptz | when the attempt row was appended (a transient row right after the claim aborted; the terminal row at the terminal commit) |
 
+**`employee_domain_state`** — the effective-dated business state a successful event applies (domain-effects): one append-only row per **successful** event, written by the event's handler inside the claim transaction.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `organization_id` | UUID FK → `organizations` (`ON DELETE CASCADE`) | the tenant discriminator, leading the timeline index |
+| `employee_id` | text | tenant-local identifier — same convention as `payroll_events.employee_id`; deliberately **no FK** to the `employees` directory (the submission gate is an application-level lookup), so the timeline is never rewritten when the directory evolves |
+| `domain` | enum `DomainKind` | `COMPENSATION` \| `BANK_ACCOUNT` \| `ADDRESS` \| `DEPARTMENT` — declared by the event type's handler |
+| `value` | JSONB | exactly the applied fields of the event type (e.g. `{ newSalary, currency }`); payload shape is validated at submission |
+| `effective_date` | date | the payload's `effectiveDate`; the timeline per `(organization_id, employee_id, domain)` is ordered by this (commit order breaks ties) |
+| `source_event_id` | UUID **UNIQUE** FK → `payroll_events` (`ON DELETE CASCADE`) | provenance AND the store-level exactly-once arbiter: at most one state row per event is unrepresentable to violate |
+| `created_at` | timestamptz | append timestamp |
+
+**Constraints/indexes:** `UNIQUE (source_event_id)`; index `(organization_id, employee_id, domain, effective_date DESC)` — the equality prefix fixes a contiguous newest-effective-first range, so a point-in-time read ("state as of date D = the first row with `effective_date ≤ D`") needs no sort. Rows are never updated or deleted by processing; events that fail transiently or permanently leave zero rows, an eventual retry leaves exactly one.
+
 **`worker_heartbeats`** — worker liveness for `/health` (D4). Intentionally NOT tenant-scoped: the worker fleet is shared infrastructure serving every organization.
 
 | Column | Type | Notes |
@@ -305,10 +325,10 @@ The core pipeline flows (submission, processing, status read) are visualized in 
 2. **ONE interactive transaction** (`event-claim.ts`, `{ timeout: 10_000, maxWait: 5_000 }`):
    a. **Concurrency lock:** `SELECT id FROM payroll_events WHERE id=? AND organization_id=? FOR UPDATE` (`$queryRaw` — Prisma has no FOR UPDATE builder). Scoping the lock by tenant means a forged or corrupt job naming a valid foreign event id locks nothing.
    b. **Guarded claim:** `UPDATE payroll_events SET status='processing' WHERE id=? AND organization_id=? AND status='queued'` — 0 rows → stale/duplicate (or foreign), skip with no side effects.
-   c. **Payload read** inside the tx (the DB row stays the source of truth), then dispatch through the handler registry.
-3. **Success** → commit `[event → success + result/processed_at + attempt → SUCCESS w/ result]` → ack job.
+   c. **Payload read** inside the tx (the DB row stays the source of truth), then dispatch through the handler registry — the handler receives the live transaction client (domain-effects D2) and, after the provider call succeeds, appends its domain's `employee_domain_state` row through it.
+3. **Success** → commit `[event → success + result/processed_at + attempt → SUCCESS w/ result + the event's `employee_domain_state` row]` → ack job.
 4. **Transient failure** → re-throw inside the tx → **ABORT** → the claim rolls back to `queued` (no explicit reset) and the attempt's `FAILED(TEMPORARY)` audit row is appended outside the aborted transaction → BullMQ schedules the retry with exponential backoff.
-5. **Permanent failure** → commit `[event → failed + attempt → FAILED(PERMANENT, reason)]`, no retry (dead-letter).
+5. **Permanent failure** → commit `[event → failed + attempt → FAILED(PERMANENT, reason)]`, no retry (dead-letter) — the handler's provider call failed before any state write, so zero `employee_domain_state` rows exist for the event.
 6. **Retries exhausted** (transient) → `onFailed` array `$transaction` commits `[queued → failed]` + upserts the final attempt's `FAILED(TEMPORARY)`, reason row — idempotent with the row the last transient failure already appended. The `queued → failed` update is scoped by `(id, organizationId)` too.
 7. **Crash anywhere** between lock and commit → the transaction aborts → the row is back in `queued` (never stuck in `processing`); BullMQ stalled-job detection additionally re-queues a job whose worker died mid-work, and a fresh worker reprocesses safely thanks to the guarded claim + terminal status guard.
 8. **Relay (on BullMQ's `completed`)** → the worker looks up the next non-terminal row for the same `(organization, employee)` in ascending `sequence` and re-enqueues it with the same tenant-qualified `jobId`. The lookup is constrained to the job's organization, so a completion in one tenant never schedules another tenant's event.
@@ -405,6 +425,53 @@ without error handling, and the response cannot be used to probe whether a token
 (`/api-docs`, `/api-docs-json`) skip the guard. Everything else, including `GET /auth/me`, needs
 a bearer token.
 
+### 7.5 Realtime lifecycle stream (`GET /events/stream`, realtime-status)
+
+The status reads above are pull-based; the stream is the push twin of
+`GET /events/:id` — one authenticated, tenant-scoped `text/event-stream` per
+client that delivers a JSON notification for each **committed** lifecycle
+transition (`{ organizationId, eventId, eventType, employeeId, sequence,
+status, occurredAt }`). The database row remains the only source of truth: a
+notification is a **hint**, the REST reads are the resynchronization path.
+
+1. **Publication (post-commit, never inside a transaction).** Each process
+   publishes on one Redis pub/sub topic (`payroll-event-status`) after the
+   committing operation returns — the API process at `received -> queued`
+   (`EventsService.markQueued`), `failed -> queued` (retry) and
+   `-> cancelled` (cancel); the worker process at the make-safe `received ->
+   queued`, the terminal `success`/`failed` outcomes of the claim
+   transaction, and the exhaustion `queued -> failed`. Publication is
+   fire-and-forget (the R2 isolation discipline): a stream failure can never
+   delay, fail, or roll back the transition or its HTTP response, and the
+   exactly-once terminal write (R5) is untouched. Because the claim's
+   `queued -> processing` step commits in the SAME transaction as its terminal
+   write, an aborted (transient-retry) claim is never announced as
+   `processing` — the stream reflects committed state only, exactly like
+   `GET /events/:id`.
+2. **Fan-out.** `@repo/database`'s `PubSubModule` owns two dedicated ioredis
+   connections (publisher in both processes, subscriber in the API only —
+   BullMQ never shares them). The API process fans messages out in process to
+   the per-connection registry (`organizationId -> clients`), with a
+   defensive second organization check before each frame is written, so
+   another tenant's transition is structurally undeliverable (R6, same 404
+   posture as the reads: nothing reveals other tenants' activity).
+3. **Delivery contract.** Best-effort by design — nothing is persisted, so a
+   notification lost between commit and publish (or while Redis is down) is
+   simply missing; a reconnecting client resynchronizes via `GET /events` +
+   `GET /events/{id}` and the stream replays nothing (`Last-Event-ID` is
+   deliberately not honoured — the transactional outbox remains
+   `integrator-webhooks`' mechanism). Heartbeat comment lines tick at
+   `EVENT_STREAM_HEARTBEAT_INTERVAL_MS` (default 15 s) so a dead connection is
+   distinguishable from an idle one, and every open stream is closed cleanly
+   on client disconnect or server shutdown (`enableShutdownHooks`).
+4. **Client.** The UI consumes the stream over `fetch` + `ReadableStream`
+   (`EventSource` cannot send the `Authorization` header), updating row badges
+   in place and hydrating a terminal row's attempt count with exactly one
+   `GET /events/{id}`. While the stream is healthy there is NO fixed-cadence
+   polling; when it is down the UI degrades to the former 3-second polling
+   with per-row error isolation and re-fetches page one on reconnect — status
+   visibility degrades to the previous behaviour, never below it.
+
 ## 8. Failure modes & recovery
 
 | Failure | Observable effect | Recovery |
@@ -441,6 +508,7 @@ a bearer token.
 | 11 `ci-and-docs` ✅ | `.github/workflows/ci.yml` (backend + frontend + e2e jobs), README + this doc — Swagger/OpenAPI delivered early by `swagger-openapi` (UI /api-docs, JSON /api-docs-json) |
 | 12 `multi-tenant-foundation` ✅ | `organizations`/`users`/`memberships`/`refresh_tokens`; required `organization_id` on `payroll_events` + `idempotency_records` with tenant-qualified unique keys and tenant-leading indexes; `POST /auth/register\|login\|refresh\|logout` + `GET /auth/me` (short-lived access JWTs, single-use rotating refresh tokens); deny-by-default guard scoped by the token's organization; tenant-qualified queue job ids; backfilling migration with a conditional legacy tenant; frontend sign-in + transparent refresh |
 | 13 `events-list-api` ✅ | `GET /events` — read-only, tenant-scoped, keyset-paginated (`created_at DESC, id DESC` cursor) event history with combinable validated filters; measured composite index `(organization_id, status, created_at DESC, id DESC)` (§7.3a); web UI history view replaces the localStorage tracked list (§7.3a read-model note: the server list is the only source; reloads re-fetch, sessions re-scope) |
+| realtime-status ✅ | `GET /events/stream` — authenticated, tenant-scoped SSE of committed lifecycle transitions (Redis pub/sub fan-out from post-commit publish sites in BOTH processes, §7.5), heartbeat + clean shutdown, UI live badges with the documented polling fallback |
 
 ## 10. Decisions (closed — implementation-ready)
 
@@ -471,8 +539,9 @@ await prisma.$transaction(async (tx) => {
     data: { status: 'processing' },
   });
   if (claimed.count === 0) return { outcome: 'skipped' };
-  // payload read → handler dispatch → terminal update + event_attempts row,
-  // OR re-throw TransientPayrollFailureError to ABORT (claim rolls back).
+  // payload read → handler dispatch (providers + domain-state write via tx)
+  // → terminal update + event_attempts row [+ employee_domain_state on success],
+  // OR re-throw TransientPayrollFailureError to ABORT (claim + state roll back).
 }, { timeout: 10_000, maxWait: 5_000 });
 ```
 **Why:** Prisma's query builder has no FOR UPDATE support (verified); the supported way is `$queryRaw` inside an interactive `$transaction`, which also exposes the guarded `UPDATE`. Plain `FOR UPDATE` (not `SKIP LOCKED`) is correct here because the second contender blocks, then its guarded claim matches 0 rows and it skips — every job still gets one definitive verdict. Isolated in `packages/core/src/processing/event-claim.ts`; the transaction stays short (well under `lockDuration`), and a transient failure re-throw aborts it with **no explicit `processing → queued` reset** — the rollback IS the reset, so a crash at any point also leaves the row claimable (R4). (Since change 12, this lock, the guarded claim, and every other statement in the transaction are additionally scoped by `organization_id` — §5 R8 / §10 D6. The snippet above shows the pre-tenancy shape.)

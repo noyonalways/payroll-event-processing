@@ -7,16 +7,14 @@
  * `cancelled` is the manual terminal state (event-recovery): reachable only
  * from the pending states (received/queued) by a recovery action.
  *
+ * Since realtime-status the canonical home of the vocabulary is `@repo/shared`
+ * — the event-status-stream notifications carry the same values — and this
+ * module re-exports it so the API boundary keeps one import site.
+ *
  * Storage keeps the Prisma `EventStatus` enum (UPPERCASE); the mapping happens
  * at the API boundary.
  */
-export const EVENT_LIFECYCLE_STATUSES = [
-  'received',
-  'queued',
-  'processing',
-  'success',
-  'failed',
-  'cancelled',
-] as const;
-
-export type EventLifecycleStatus = (typeof EVENT_LIFECYCLE_STATUSES)[number];
+export {
+  EVENT_LIFECYCLE_STATUSES,
+  type EventLifecycleStatus,
+} from '@repo/shared';

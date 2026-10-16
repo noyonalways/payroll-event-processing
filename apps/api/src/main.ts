@@ -23,6 +23,10 @@ async function bootstrap() {
   app.useLogger(logLevelsFor(configService.get<string>('LOG_LEVEL')));
   const port = configService.get<number>('PORT', 3000);
 
+  // Graceful shutdown (realtime-status): on SIGTERM the event-status-stream's
+  // onModuleDestroy closes every open SSE connection cleanly before exit.
+  app.enableShutdownHooks();
+
   // Global validation pipe — whitelist strips unknown fields, forbidNonWhitelisted rejects them
   app.useGlobalPipes(
     new ValidationPipe({

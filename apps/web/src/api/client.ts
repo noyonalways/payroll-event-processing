@@ -175,3 +175,26 @@ export async function request<T>(url: string, init: RequestInit = {}): Promise<T
   }
   return parseBody<T>(res);
 }
+
+/**
+ * Authenticated RAW response — the streaming twin of `request` (realtime-status):
+ * the same single 401 → refresh rotation → replay, the same error
+ * normalization, but the `Response` is returned untouched so the caller can
+ * consume its body incrementally (an SSE stream is not JSON to parse once).
+ */
+export async function fetchAuthorized(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  let res = await transport(url, authorizedInit(init));
+
+  if (res.status === 401) {
+    await refreshSession();
+    res = await transport(url, authorizedInit(init));
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.status, await parseErrorBody(res));
+  }
+  return res;
+}

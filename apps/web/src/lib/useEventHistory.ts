@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { EventStatusNotification } from '@repo/shared';
 
 import { fetchEventStatus, fetchEventsPage } from '../api/events';
 import { isTerminal } from './status';
+import { useEventStream } from './useEventStream';
 import type { EventListQuery, EventType, LifecycleStatus } from './types';
 
-/** Fixed polling interval for non-terminal history rows. */
+/** Fixed fallback-polling interval for non-terminal history rows. */
 export const POLL_INTERVAL_MS = 3000;
 
 /** Page size the UI walks with; the server default (20) matches. */
@@ -114,10 +116,14 @@ export interface UseEventHistoryOptions {
  * page its `nextCursor` points at (keyset — stable under concurrent writes),
  * and `refresh()` re-fetches page one (what a fresh submission triggers).
  *
- * Row-level status polling via `GET /events/{id}` STAYS: every non-terminal
- * row (plus every row never yet polled) is refreshed on the fixed cadence, a
- * failing poll marks only its own row unavailable, and polling stops for a row
- * once a terminal state has been observed.
+ * Status updates arrive over the event-status-stream (frontend-app, see
+ * `useEventStream`): each notification updates the matching rendered row's
+ * badge in place, and a terminal notification hydrates the row's attempt count
+ * with exactly one follow-up `GET /events/{id}`. While the stream is healthy
+ * there is NO fixed-cadence polling; when it is down the hook degrades to the
+ * former behavior — every eligible row polled on the fixed cadence with
+ * per-row failure isolation — until the stream reconnects (whereupon page one
+ * is re-fetched to close any gap the outage hid).
  */
 export function useEventHistory(options: UseEventHistoryOptions = {}) {
   const lockedStatus = options.lockedStatus;
@@ -226,15 +232,66 @@ export function useEventHistory(options: UseEventHistoryOptions = {}) {
     }
   }, [nextCursor]);
 
-  // Row-level detail polling. Single interval on a latest-rows ref (creating
-  // the timer once, not per keystroke of state), firing immediately so a
-  // freshly listed page hydrates without waiting a full cadence.
   const rowsRef = useRef(rows);
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
 
+  /**
+   * Applies one stream notification (frontend-app): a badge update in place
+   * for the matching row — notifications for events not in the rendered list
+   * add no row — and, on a terminal notification, a single follow-up
+   * `GET /events/{id}` that records the attempt count; that row is then
+   * untracked while the stream stays healthy.
+   */
+  const applyNotification = useCallback((notification: EventStatusNotification) => {
+    // Lookup on the latest-rows ref: the side effect (one hydrating fetch)
+    // must stay OUT of the state updater, which React may run more than once.
+    const row = rowsRef.current.find((entry) => entry.id === notification.eventId);
+    if (!row) return;
+    const nextStatus = notification.status as LifecycleStatus;
+    setRows((prev) =>
+      prev.map((entry) =>
+        entry.id === row.id ? { ...entry, status: nextStatus, error: undefined } : entry,
+      ),
+    );
+    if (isTerminal(nextStatus) && !(row.status === nextStatus && row.hydrated)) {
+      void fetchEventStatus(row.id).then(
+        (res) =>
+          setRows((current) =>
+            current.map((entry) =>
+              entry.id === row.id
+                ? {
+                    ...entry,
+                    status: res.status,
+                    sequence: res.sequence,
+                    attempts: res.attempts.length,
+                    error: undefined,
+                    hydrated: true,
+                  }
+                : entry,
+            ),
+          ),
+        () => undefined, // the badge already carries the committed state
+      );
+    }
+  }, []);
+
+  const { connected: streamConnected } = useEventStream({
+    enabled: true,
+    onNotification: applyNotification,
+    // A reconnect replays nothing: re-fetch page one for the CURRENT filters
+    // so anything the outage missed is corrected before live updates resume.
+    onResync: fetchFirstPage,
+  });
+
+  // Polling fallback (frontend-app, "Stream loss degrades to the polling
+  // fallback"): ONLY while the stream is disconnected or failing. Same
+  // semantics as before the stream existed — single interval on a latest-rows
+  // ref, firing immediately, per-row failure isolation. Once the stream
+  // reconnects this effect tears down entirely: no fixed-cadence polling.
   useEffect(() => {
+    if (streamConnected) return;
     let inFlight = false;
     const tick = () => {
       if (inFlight) return;
@@ -284,7 +341,7 @@ export function useEventHistory(options: UseEventHistoryOptions = {}) {
     tick();
     const timer = setInterval(tick, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [streamConnected]);
 
   return {
     rows,
@@ -297,5 +354,6 @@ export function useEventHistory(options: UseEventHistoryOptions = {}) {
     loading,
     loadingMore,
     loadError,
+    streamConnected,
   };
 }

@@ -8,10 +8,11 @@ import {
   PayrollEventQueueService,
   PayrollEventJobInput,
 } from '../queue/payroll-event-queue.service';
-import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB, TransientPayrollFailureError } from '@repo/shared';
+import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB, EventType, TransientPayrollFailureError } from '@repo/shared';
 import { WORKER_OPTIONS } from '@repo/database';
 import { EventClaim } from '../processing/event-claim';
 import { HeartbeatService } from '../processing/heartbeat.service';
+import { EventStatusPublisher } from '../events/event-status.publisher';
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
  *
@@ -66,6 +67,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     private readonly config: ConfigService,
     private readonly eventClaim: EventClaim,
     private readonly heartbeat: HeartbeatService,
+    private readonly streamPublisher: EventStatusPublisher,
   ) {
     super();
     this.maxRetryAttempts = this.config.get<number>('PAYROLL_MAX_RETRY_ATTEMPTS', 5);
@@ -159,6 +161,33 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
         `(seq ${sequence}, attempts exhausted after ${job.attemptsMade}, worker ${this.workerPid}) — exhausted: ${error.message}`,
     );
+    // Post-commit stream announcement (D3): the exhaustion transaction
+    // committed `queued → failed` — the terminal state is announced here, and
+    // only here (mid-retry failures commit nothing).
+    this.announce(job.data, 'failed');
+  }
+
+  /**
+   * Announces a committed transition on the event-status-stream (design D2).
+   * Fire-and-forget (R2): a stream failure is logged inside the publisher and
+   * can neither reach nor delay the lifecycle path that already committed.
+   */
+  private announce(
+    data: PayrollEventJobInput,
+    status: 'queued' | 'success' | 'failed',
+  ): void {
+    this.streamPublisher.publish({
+      organizationId: data.organizationId,
+      eventId: data.eventId,
+      // The job data carries the event type as `EventType | string`; every
+      // persisted value is a registry-supported type, so the wire contract
+      // reclaims the enum at this boundary.
+      eventType: data.eventType as EventType,
+      employeeId: data.employeeId,
+      sequence: data.sequence,
+      status,
+      occurredAt: new Date().toISOString(),
+    });
   }
 
   async process(job: Job<PayrollEventJobInput>): Promise<void> {
@@ -176,10 +205,17 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     //    this flips it to queued before the claim (no-op when the producer
     //    already did). Stays OUTSIDE the claim transaction: it is a
     //    pre-queuing make-safe, not part of the guarded lifecycle.
-    await this.prisma.payrollEvent.updateMany({
+    const madeQueued = await this.prisma.payrollEvent.updateMany({
       where: { id: eventId, organizationId, status: EventStatus.RECEIVED },
       data: { status: EventStatus.QUEUED },
     });
+    // Post-commit stream announcement (realtime-status design D3): when the
+    // make-safe applied, the row is genuinely committed `queued` — the
+    // backstop announcement for a submission whose API-side markQueued write
+    // slipped (R2: fire-and-forget, never load-bearing).
+    if (madeQueued.count > 0) {
+      this.announce(job.data, 'queued');
+    }
 
     // 2. Worker liveness (design D4): bump before dispatch so /health sees the
     //    worker fresh even on slow processing runs between the periodic ticks.
@@ -215,12 +251,16 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
             `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
               `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — permanent-failure: ${outcome.reason}`,
           );
+          // Post-commit announcement (D3): the terminal `failed` write COMMITTED
+          // inside the claim transaction — announce only now, never from within.
+          this.announce(job.data, 'failed');
           return;
         case 'success':
           this.logger.log(
             `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
               `(seq ${sequence}, attempt ${attempt}, worker ${this.workerPid}) — succeeded (reference ${outcome.reference})`,
           );
+          this.announce(job.data, 'success');
           return;
       }
     } catch (error) {

@@ -9,3 +9,5 @@ export { PrismaModule } from './prisma/prisma.module';
 export { PrismaService } from './prisma/prisma.service';
 export { QueueModule } from './queue/queue.module';
 export { WORKER_OPTIONS } from './queue/worker-options';
+export { PubSubModule } from './pubsub/pubsub.module';
+export { PubSubService } from './pubsub/pubsub.service';

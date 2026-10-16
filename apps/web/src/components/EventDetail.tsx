@@ -10,6 +10,13 @@ import { StatusBadge } from './StatusBadge';
 
 export interface EventDetailProps {
   entry: HistoryRow;
+  /**
+   * True while the event-status-stream is healthy (realtime-status): updates
+   * arrive as notifications — the `entry` prop itself moves on the selected
+   * event's transitions, re-reading the detail — so the fixed-cadence polling
+   * interval is suspended. When the stream is down the poller takes over.
+   */
+  live?: boolean;
 }
 
 function jsonBlock(value: unknown): string {
@@ -18,12 +25,13 @@ function jsonBlock(value: unknown): string {
 
 /**
  * Detail panel for the selected event: fetches the full `GET /events/{id}`
- * body (payload, sequence, timestamps, result, attempt trail) and refreshes on
- * the polling cadence while the event is still non-terminal, so the panel
- * tracks retries and the terminal write without a manual refresh. A failed
- * fetch (network error or 404) renders the `unavailable` state.
+ * body (payload, sequence, timestamps, result, attempt trail) and refreshes
+ * with the row — per stream notification while live, or on the polling cadence
+ * while the stream is down — so the panel tracks retries and the terminal
+ * write without a manual refresh. A failed fetch (network error or 404)
+ * renders the `unavailable` state.
  */
-export function EventDetail({ entry }: EventDetailProps) {
+export function EventDetail({ entry, live = false }: EventDetailProps) {
   const [detail, setDetail] = useState<EventStatusResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -46,17 +54,17 @@ export function EventDetail({ entry }: EventDetailProps) {
       );
     };
     load();
-    if (!isTerminal(entry.status)) {
-      const timer = setInterval(load, POLL_INTERVAL_MS);
+    if (live || isTerminal(entry.status)) {
       return () => {
         cancelled = true;
-        clearInterval(timer);
       };
     }
+    const timer = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
-  }, [entry.id, entry.status]);
+  }, [entry.id, entry.status, live]);
 
   if (loadError) {
     return (
