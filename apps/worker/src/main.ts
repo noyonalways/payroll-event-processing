@@ -4,7 +4,12 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // The consumer composition root comes from the business-logic package (design
 // D4): this file is the worker's entrypoint, not business logic.
-import { WorkerModule, logLevelsFor } from '@repo/core';
+import { WorkerModule, logLevelsFor, initTracing, initErrorTracking } from '@repo/core';
+
+// Tracing + error tracking bootstrap (observability design D3/D4) — both
+// env-gated, both must precede the application module.
+void initTracing();
+void initErrorTracking('worker');
 
 async function bootstrap() {
   const logger = new Logger('WorkerBootstrap');

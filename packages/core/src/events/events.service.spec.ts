@@ -7,6 +7,7 @@ import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { EventStatusPublisher } from './event-status.publisher';
+import { MetricsService } from '../telemetry/metrics.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 const ORG = 'org-a';
 const OTHER_ORG = 'org-b';
@@ -27,6 +28,7 @@ describe('EventsService', () => {
   const eventQueue = { enqueueBestEffort: jest.fn() };
   const idempotency = { execute: jest.fn() };
   const streamPublisher = { publish: jest.fn() };
+  const metrics = { recordSubmitted: jest.fn(), recordTerminal: jest.fn() };
 
   const input = (overrides: Partial<CreateEventInput> = {}): CreateEventInput => ({
     eventType: EventType.BANK_ACCOUNT_CHANGE,
@@ -63,6 +65,7 @@ describe('EventsService', () => {
         { provide: PayrollEventQueueService, useValue: eventQueue },
         { provide: IdempotencyService, useValue: idempotency },
         { provide: EventStatusPublisher, useValue: streamPublisher },
+        { provide: MetricsService, useValue: metrics },
       ],
     }).compile();
 

@@ -1,0 +1,55 @@
+# Alert rules (observability design D5) — every expression references ONLY
+# payroll_* series the pipeline actually exposes. Thresholds are documented
+# starting points; tune with the runbook (monitoring/README.md, task 4.3).
+groups:
+  - name: payroll-pipeline
+    rules:
+      - alert: PayrollQueueBacklog
+        expr: sum(payroll_queue_jobs{state="waiting"}) + sum(payroll_queue_jobs{state="delayed"}) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payroll event queue is backing up (waiting+delayed > 100 for 10m)"
+          runbook: monitoring/README.md#queue-backlog
+
+      - alert: PayrollWorkerLivenessLost
+        expr: payroll_worker_heartbeats_stale >= 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No fresh worker heartbeat — stalled or dead worker"
+          runbook: monitoring/README.md#worker-liveness
+
+      - alert: PayrollQueueStalledJobs
+        expr: rate(payroll_queue_stalled_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "BullMX stalled-job detection is firing (jobs are being re-queued)"
+          runbook: monitoring/README.md#stalled-jobs
+
+      - alert: PayrollTerminalFailureSpike
+        expr: rate(payroll_events_terminal_total{status="FAILED"}[15m]) > 0.2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Terminal failure rate above 0.2/s (15m) — check attempts + error types"
+          runbook: monitoring/README.md#terminal-failures
+
+      - alert: PayrollWebhookDeadLetters
+        expr: rate(payroll_webhook_deliveries_total{outcome="DEAD_LETTERED"}[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook deliveries are dead-lettering — integrator endpoints failing"
+          runbook: monitoring/README.md#webhook-dead-letters
+
+      - alert: PayrollMetricsScrapesFailing
+        expr: rate(payroll_queue_metrics_errors_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue-count polling is failing (Redis reachability?) — gauge staleness"
+          runbook: monitoring/README.md#metrics-scrapes

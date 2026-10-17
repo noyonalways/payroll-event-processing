@@ -1,0 +1,19 @@
+# Prometheus scrape config (observability design D5). The api + worker expose
+# payroll_* series on their metrics listeners; both are unauthenticated by the
+# same posture as /health — the compose network keeps this private.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: payroll-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:3000']
+
+  - job_name: payroll-worker
+    static_configs:
+      - targets: ['worker:9101']

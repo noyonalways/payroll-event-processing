@@ -9,9 +9,10 @@ import { PayloadValidator } from './payload.validator';
 import { EventStatusPublisherModule } from './event-status-publisher.module';
 import { PayrollEventQueueModule } from '../queue/payroll-event-queue.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 
 @Module({
-  imports: [PayrollEventQueueModule, IdempotencyModule, EventStatusPublisherModule, PubSubModule],
+  imports: [PayrollEventQueueModule, IdempotencyModule, EventStatusPublisherModule, PubSubModule, WebhooksModule],
   // EventsController's `GET /events/:id` is a PARAMETRIC route: whichever
   // controller binds first wins the path `/events/stream`, so the static
   // `GET /events/stream` route must be registered BEFORE it (design D4).

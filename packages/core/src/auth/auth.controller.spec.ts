@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { MembershipRole } from '@prisma/client';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { PasswordResetService } from './password-reset.service';
 import { IS_PUBLIC_KEY } from './auth.constants';
 import { ActorIdentityDto, SessionResponseDto } from './dto/session-response.dto';
 
@@ -41,7 +42,11 @@ describe('AuthController', () => {
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: authService }],
+      providers: [
+        { provide: AuthService, useValue: authService },
+        // Password reset routes (auth-hardening): the controller delegates.
+        { provide: PasswordResetService, useValue: { requestReset: jest.fn(), reset: jest.fn() } },
+      ],
     }).compile();
 
     controller = moduleRef.get<AuthController>(AuthController);

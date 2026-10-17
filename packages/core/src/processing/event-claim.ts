@@ -3,6 +3,8 @@ import { EventStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
 import { EventType, TransientPayrollFailureError, ProcessingResult } from '@repo/shared';
+import { WebhookOutboxWriter } from '../webhooks/webhook-outbox.writer';
+import { MetricsService } from '../telemetry/metrics.service';
 /**
  * Outcome of `claimAndProcess`. Only `permanent-failure` and `success` carry a
  * payload for the caller's log lines; `skipped` means the job was stale or a
@@ -56,6 +58,8 @@ export class EventClaim {
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: HandlerRegistry,
+    private readonly webhookOutbox: WebhookOutboxWriter,
+    private readonly metrics: MetricsService,
   ) {}
 
   async claimAndProcess(input: EventClaimInput): Promise<EventClaimOutcome> {
@@ -124,6 +128,9 @@ export class EventClaim {
             throw error;
           }
           const reason = error instanceof Error ? error.message : String(error);
+          // Terminal failed transition + the FAILED attempt row + the webhook
+          // delivery intents commit or roll back TOGETHER (R5 + webhook outbox
+          // atomicity): no terminal state without its notification intents.
           await tx.payrollEvent.updateMany({
             where: { id: eventId, organizationId, status: EventStatus.PROCESSING },
             data: { status: EventStatus.FAILED },
@@ -137,16 +144,30 @@ export class EventClaim {
               failedReason: reason,
             },
           });
+          await this.webhookOutbox.write(tx, {
+            eventId,
+            organizationId,
+            employeeId,
+            eventType,
+            sequence,
+            status: 'FAILED',
+            failedReason: reason,
+            occurredAt: new Date().toISOString(),
+          });
+          this.metrics.recordTerminal(eventType as string, 'FAILED');
+          this.metrics.recordAttempt('PERMANENT');
           return { outcome: 'permanent-failure', reason } as const;
         }
 
         // 5. Success: terminal `processing → success` + result + processed_at,
-        //    and the SUCCESS attempt row, committed together (R5).
+        //    the SUCCESS attempt row, and the webhook delivery intents,
+        //    committed together (R5 + integrator-webhooks design D3).
+        const processedAt = new Date();
         await tx.payrollEvent.updateMany({
           where: { id: eventId, organizationId, status: EventStatus.PROCESSING },
           data: {
             status: EventStatus.SUCCESS,
-            processedAt: new Date(),
+            processedAt,
             result: result as unknown as Prisma.InputJsonValue,
           },
         });
@@ -158,6 +179,18 @@ export class EventClaim {
             result: result as unknown as Prisma.InputJsonValue,
           },
         });
+        await this.webhookOutbox.write(tx, {
+          eventId,
+          organizationId,
+          employeeId,
+          eventType,
+          sequence,
+          status: 'SUCCESS',
+          result,
+          occurredAt: processedAt.toISOString(),
+        });
+        this.metrics.recordTerminal(eventType as string, 'SUCCESS');
+        this.metrics.recordAttempt('NONE');
         return { outcome: 'success', reference: result.reference } as const;
       },
       { timeout: 10_000, maxWait: 5_000 },

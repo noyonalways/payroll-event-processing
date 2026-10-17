@@ -11,6 +11,7 @@ import { AuthService } from './auth.service';
 import { AuthenticatedActor } from './authenticated-actor';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
+import { ConfigService } from '@nestjs/config';
 
 const USER_ID = 'user-1';
 const ORG = 'org-a';
@@ -57,7 +58,7 @@ describe('AuthService', () => {
     employee: { createMany: jest.fn() },
   };
   const prisma = {
-    user: { findUnique: jest.fn() },
+    user: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
     membership: { findUnique: jest.fn(), findMany: jest.fn() },
     $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
   };
@@ -84,12 +85,14 @@ describe('AuthService', () => {
     passwords.verify.mockResolvedValue(true);
     tokens.issueSession.mockResolvedValue(issued);
     tx.organization.create.mockResolvedValue(organization);
-    tx.user.create.mockResolvedValue(user);
+    tx.user.create.mockResolvedValue({ ...user, failedLoginCount: 0, lockedUntil: null });
     tx.membership.create.mockResolvedValue(membershipWithTenant);
     tx.employee.createMany.mockResolvedValue({ count: 5 });
     prisma.user.findUnique.mockResolvedValue(null);
     service = new AuthService(
       prisma as unknown as PrismaService,
+      // Auth-hardening knobs: a ConfigService mock reading nothing (defaults).
+      { get: jest.fn(() => undefined) } as unknown as ConfigService,
       passwords as unknown as PasswordService,
       tokens as unknown as TokenService,
     );

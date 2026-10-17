@@ -6,6 +6,12 @@ import { QueueModule } from '@repo/database';
 import { resolveStageEnvFile } from '../config/env-file';
 import { PayrollEventQueueModule } from '../queue/payroll-event-queue.module';
 import { ProcessingModule } from '../processing/processing.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
+import { WebhookRelayService } from '../webhooks/webhook-relay.service';
+import { TelemetryModule } from '../telemetry/telemetry.module';
+import { WorkerMetricsService } from '../telemetry/worker-metrics.service';
+import { AuthSweepService } from '../auth/auth-sweep.service';
+import { AuthModule } from '../auth/auth.module';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { PayrollEventProcessor } from './payroll-event.processor';
 import { EventStatusPublisherModule } from '../events/event-status-publisher.module';
@@ -43,6 +49,25 @@ import { EventStatusPublisherModule } from '../events/event-status-publisher.mod
         PAYROLL_WORKER_MAX_STALLED_COUNT: Joi.number().integer().min(1).default(1),
         // Worker liveness heartbeat upsert cadence (design D4).
         WORKER_HEARTBEAT_INTERVAL_MS: Joi.number().integer().min(1000).default(5000),
+        // Webhook delivery relay (integrator-webhooks design D6): poll cadence,
+        // batch size, per-delivery retry cap, and request timeout. The relay
+        // runs in the worker only — the single background-driver principle.
+        // Real-provider HTTP adapter (real-provider-adapter design D4): the
+        // per-request timeout bounding the external call INSIDE the claim tx.
+        PROVIDER_HTTP_TIMEOUT_MS: Joi.number().integer().min(1000).default(10000),
+        // Observability (design D1/D2): worker-side metrics surface + poll.
+        METRICS_PROCESS_NAME: Joi.string().default('worker'),
+        WORKER_METRICS_PORT: Joi.number().integer().min(1).default(9101),
+        METRICS_QUEUE_POLL_MS: Joi.number().integer().min(1000).default(5000),
+        // Auth retention sweep (auth-hardening design D4): interval + the
+        // retention window for revoked/expired token rows.
+        AUTH_SWEEP_INTERVAL_MS: Joi.number().integer().min(60_000).default(3_600_000),
+        AUTH_TOKEN_RETENTION_DAYS: Joi.number().integer().min(1).default(7),
+        WEBHOOK_RELAY_ENABLED: Joi.boolean().default(true),
+        WEBHOOK_RELAY_INTERVAL_MS: Joi.number().integer().min(1000).default(5000),
+        WEBHOOK_RELAY_BATCH_SIZE: Joi.number().integer().min(1).default(10),
+        WEBHOOK_RELAY_MAX_ATTEMPTS: Joi.number().integer().min(1).default(8),
+        WEBHOOK_DELIVERY_TIMEOUT_MS: Joi.number().integer().min(1000).default(10000),
       }),
       validationOptions: {
         allowUnknown: true,
@@ -59,7 +84,22 @@ import { EventStatusPublisherModule } from '../events/event-status-publisher.mod
     // The worker's processor announces committed transitions on the
     // event-status-stream (realtime-status design D3).
     EventStatusPublisherModule,
+    // Webhook delivery: the relay drives the transactional outbox produced by
+    // the terminal commits (integrator-webhooks design D6). Imported module
+    // provides the HTTP client; the controller/config surface is inert here.
+    WebhooksModule,
+    TelemetryModule,
+    // The sweep needs nothing from the auth session machinery beyond Prisma +
+    // config, but AuthModule carries its own Joi-validated ConfigModule —
+    // harmless here, and the provider list stays deliberately explicit.
+    AuthModule,
   ],
-  providers: [PayrollEventProcessor, HeartbeatService],
+  providers: [
+    PayrollEventProcessor,
+    HeartbeatService,
+    WebhookRelayService,
+    WorkerMetricsService,
+    AuthSweepService,
+  ],
 })
 export class WorkerModule {}

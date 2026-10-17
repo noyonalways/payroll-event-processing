@@ -86,16 +86,16 @@ and housekeeping. Each becomes one OpenSpec change via `/opsx:propose` -> `/opsx
 | --- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
 | 1   | `events-list-api`           | `GET /events` with cursor pagination + filters (status, event type, employee, date range) and a server-driven Events page in the UI; the first way to browse event history | ✅ Done |
 | 2   | `event-recovery-actions`    | Retry a failed event, cancel a queued one, dead-letter view; manual actions recorded in `event_attempts`/audit                                                             | ✅ Done |
-| 3   | `employee-directory`        | Org-scoped `employees` table + CRUD; `employeeId` validated against it (no more free-form strings)                                                                         | Queued |
-| 4   | `domain-effects`            | Handlers write real effective-dated state (compensation, bank account, address, department) inside the claim transaction — events gain a business effect                   | Queued |
+| 3   | `employee-directory`        | Org-scoped `employees` table + CRUD; `employeeId` validated against it (no more free-form strings)                                                                         | ✅ Done |
+| 4   | `domain-effects`            | Handlers write real effective-dated state (compensation, bank account, address, department) inside the claim transaction — events gain a business effect                   | ✅ Done |
 | 5   | `realtime-status`           | SSE stream replacing UI polling for lifecycle status                                                                                                                       | ✅ Done |
-| 6   | `integrator-webhooks`       | Signed webhooks on terminal states via a transactional outbox (written with the terminal state, per D7's take on the same pattern)                                         | Queued |
-| 7   | `role-enforcement`          | RBAC guards on endpoints using the existing OWNER/ADMIN/MEMBER roles                                                                                                       | Queued |
-| 8   | `org-membership-management` | Invitations, member list, role changes (API + UI) — the way a second user joins an organization                                                                            | Queued |
-| 9   | `real-provider-adapter`     | Replace the simulated provider behind the handler registry; per-organization external endpoint config                                                                      | Queued |
-| 10  | `observability`             | Prometheus/OpenTelemetry metrics, error tracking (Sentry), queue-depth alerting                                                                                            | Queued |
-| 11  | `auth-hardening`            | Password reset, account lockout, rate limiting (`@nestjs/throttler`), refresh-token retention sweep                                                                        | Queued |
-| 12  | `spec-sync`                 | Fix two known spec/code drifts: `event-processing` (every processing attempt is now recorded) and pre-monorepo doc remnants                                                | Queued |
+| 6   | `integrator-webhooks`       | Signed webhooks on terminal states via a transactional outbox (written with the terminal state, per D7's take on the same pattern)                                         | ✅ Done |
+| 7   | `role-enforcement`          | RBAC guards on endpoints using the existing OWNER/ADMIN/MEMBER roles                                                                                                       | ✅ Done |
+| 8   | `org-membership-management` | Invitations, member list, role changes (API + UI) — the way a second user joins an organization                                                                            | ✅ Done |
+| 9   | `real-provider-adapter`     | Replace the simulated provider behind the handler registry; per-organization external endpoint config                                                                      | ✅ Done |
+| 10  | `observability`             | Prometheus/OpenTelemetry metrics, error tracking (Sentry), queue-depth alerting                                                                                            | ✅ Done |
+| 11  | `auth-hardening`            | Password reset, account lockout, rate limiting (`@nestjs/throttler`), refresh-token retention sweep                                                                        | ✅ Done |
+| 12  | `spec-sync`                 | Fix two known spec/code drifts: `event-processing` (every processing attempt is now recorded) and pre-monorepo doc remnants                                                | ✅ Done |
 
 
 Notes:

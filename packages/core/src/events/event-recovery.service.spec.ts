@@ -5,6 +5,8 @@ import { EventRecoveryService } from './event-recovery.service';
 import { EventStatusPublisher } from './event-status.publisher';
 import { PrismaService } from '@repo/database';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
+import { WebhookOutboxWriter } from '../webhooks/webhook-outbox.writer';
+import { MetricsService } from '../telemetry/metrics.service';
 import { EventType } from '@repo/shared';
 
 const ORG = 'org-a';
@@ -26,10 +28,15 @@ describe('EventRecoveryService', () => {
     payrollEvent: { findFirst: jest.fn(), updateMany: jest.fn() },
     eventAttempt: { aggregate: jest.fn() },
     eventAction: { create: jest.fn() },
+    // The outbox writer reads active endpoints through the LIVE tx client —
+    // which IS this mock (the interactive tx reuses it by convention here).
+    webhookEndpoint: { findMany: jest.fn() },
     $transaction: jest.fn(),
   };
   const eventQueue = { enqueueBestEffort: jest.fn() };
   const streamPublisher = { publish: jest.fn() };
+  const webhookOutbox = { write: jest.fn().mockResolvedValue(undefined) };
+  const metrics = { recordTerminal: jest.fn(), recordAttempt: jest.fn() };
 
   const failedRow = {
     id: 'evt-1',
@@ -61,6 +68,8 @@ describe('EventRecoveryService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PayrollEventQueueService, useValue: eventQueue },
         { provide: EventStatusPublisher, useValue: streamPublisher },
+        { provide: WebhookOutboxWriter, useValue: webhookOutbox },
+        { provide: MetricsService, useValue: metrics },
       ],
     }).compile();
 
@@ -68,6 +77,8 @@ describe('EventRecoveryService', () => {
     prisma.payrollEvent.findFirst.mockReset();
     prisma.payrollEvent.updateMany.mockReset().mockResolvedValue({ count: 1 });
     prisma.eventAttempt.aggregate.mockReset().mockResolvedValue({ _max: { attemptNumber: 2 } });
+    prisma.webhookEndpoint.findMany.mockReset().mockResolvedValue([]);
+    webhookOutbox.write.mockReset().mockResolvedValue(undefined);
     prisma.eventAction.create.mockReset().mockResolvedValue({ id: 'audit-1' });
     prisma.$transaction.mockReset();
     interactiveTx();
@@ -257,6 +268,30 @@ describe('EventRecoveryService', () => {
       expect(prisma.eventAction.create).toHaveBeenCalledWith({
         data: { eventId: 'evt-1', action: 'CANCEL', userId: 'user-1' },
       });
+    });
+
+    it('writes a CANCELLED webhook intent inside the cancel transaction (integrator-webhooks)', async () => {
+      interactiveTx();
+      prisma.payrollEvent.findFirst.mockResolvedValue(queuedRow);
+      prisma.webhookEndpoint.findMany.mockResolvedValue([
+        { id: 'ep-1', url: 'https://hooks.example/a' },
+      ]);
+
+      await service.cancelEvent(ORG, 'evt-1', 'user-1');
+
+      expect(webhookOutbox.write).toHaveBeenCalledTimes(1);
+      const [txArg, notification] = webhookOutbox.write.mock.calls[0];
+      expect(txArg).toBe(prisma as unknown);
+      expect(notification).toMatchObject({
+        eventId: 'evt-1',
+        organizationId: ORG,
+        employeeId: 'emp-1',
+        eventType: EventType.SALARY_CHANGE,
+        sequence: 3,
+        status: 'CANCELLED',
+      });
+      expect(notification.result).toBeUndefined();
+      expect(notification.failedReason).toBeUndefined();
     });
 
     it('404s an unknown or foreign id without writing anything', async () => {

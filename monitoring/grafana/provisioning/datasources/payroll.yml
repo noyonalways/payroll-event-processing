@@ -1,0 +1,9 @@
+# Starter datasource (observability design D5): the Prometheus scraping this
+# compose network. The dashboard provisioner points at ./dashboards.
+apiVersion: 1
+datasources:
+  - name: Payroll Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

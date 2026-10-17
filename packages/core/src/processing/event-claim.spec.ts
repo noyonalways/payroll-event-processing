@@ -1,6 +1,8 @@
 import { EventClaim } from './event-claim';
 import { PrismaService } from '@repo/database';
 import { HandlerRegistry } from './handler-registry';
+import { WebhookOutboxWriter } from '../webhooks/webhook-outbox.writer';
+import { MetricsService } from '../telemetry/metrics.service';
 import { EventStatus } from '@prisma/client';
 import { EventType, TransientPayrollFailureError, PermanentPayrollFailureError, ProcessingResult } from '@repo/shared';
 const ORG = 'org-a';
@@ -22,9 +24,17 @@ describe('EventClaim (transactional claim & process)', () => {
     $queryRaw: jest.fn(),
     payrollEvent: { updateMany: jest.fn(), findFirst: jest.fn() },
     eventAttempt: { create: jest.fn() },
+    webhookEndpoint: { findMany: jest.fn() },
   };
   const prisma = { $transaction: jest.fn() };
   const registry = { resolve: jest.fn() };
+  const webhookOutbox = { write: jest.fn().mockResolvedValue(undefined) };
+  const metrics = {
+    recordTerminal: jest.fn(),
+    recordAttempt: jest.fn(),
+    observeProcessing: jest.fn(),
+    recordSubmitted: jest.fn(),
+  };
 
   const successResult: ProcessingResult = {
     reference: 'SIM-test-ref',
@@ -70,9 +80,14 @@ describe('EventClaim (transactional claim & process)', () => {
       payload: successResult.acknowledged,
     });
     tx.eventAttempt.create.mockResolvedValue({ id: 'attempt-1' });
+    // The outbox writer's tx-side reads default to "no active endpoints" —
+    // individual webhook suites below override this and assert intents.
+    tx.webhookEndpoint.findMany.mockResolvedValue([]);
     eventClaim = new EventClaim(
       prisma as unknown as PrismaService,
       registry as unknown as HandlerRegistry,
+      webhookOutbox as unknown as WebhookOutboxWriter,
+      metrics as unknown as MetricsService,
     );
   });
 
@@ -303,6 +318,62 @@ describe('EventClaim (transactional claim & process)', () => {
       );
       // No terminal attempt write "committed" — nothing below the tx boundary.
       expect(tx.eventAttempt.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // integrator-webhooks: the delivery intent commit rides the SAME claim
+  // transaction as the terminal transition + attempt row (design D3).
+  describe('webhook delivery intents (integrator-webhooks)', () => {
+    it('writes a SUCCESS intent inside the claim transaction on success', async () => {
+      registry.resolve.mockReturnValue(stubStrategy('success'));
+      tx.webhookEndpoint.findMany.mockResolvedValueOnce([
+        { id: 'ep-1', url: 'https://hooks.example/a' },
+      ]);
+
+      await eventClaim.claimAndProcess(INPUT);
+
+      expect(webhookOutbox.write).toHaveBeenCalledTimes(1);
+      const [txArg, notification] = webhookOutbox.write.mock.calls[0];
+      expect(txArg).toBe(tx);
+      expect(notification).toMatchObject({
+        eventId: 'evt-1',
+        organizationId: ORG,
+        employeeId: 'emp-1',
+        eventType: EventType.BANK_ACCOUNT_CHANGE,
+        sequence: 1,
+        status: 'SUCCESS',
+        result: successResult,
+      });
+      // Terminal transition precedes the intent write — same tx, committed together.
+      const terminalOrder = tx.payrollEvent.updateMany.mock.invocationCallOrder.at(-1);
+      const intentOrder = webhookOutbox.write.mock.invocationCallOrder[0];
+      expect(terminalOrder).toBeLessThan(intentOrder);
+    });
+
+    it('writes a FAILED intent with the reason for a permanent failure', async () => {
+      registry.resolve.mockReturnValue(stubStrategy('permanent'));
+      tx.webhookEndpoint.findMany.mockResolvedValueOnce([
+        { id: 'ep-1', url: 'https://hooks.example/a' },
+      ]);
+
+      await eventClaim.claimAndProcess(INPUT);
+
+      expect(webhookOutbox.write).toHaveBeenCalledTimes(1);
+      const [, notification] = webhookOutbox.write.mock.calls[0];
+      expect(notification).toMatchObject({
+        status: 'FAILED',
+        failedReason: 'business rejection',
+      });
+      expect(notification.result).toBeUndefined();
+    });
+
+    it('writes no intent when the organization has no active endpoints', async () => {
+      registry.resolve.mockReturnValue(stubStrategy('success'));
+      tx.webhookEndpoint.findMany.mockResolvedValueOnce([]);
+
+      await eventClaim.claimAndProcess(INPUT);
+
+      expect(webhookOutbox.write).toHaveBeenCalledTimes(1);
     });
   });
 });

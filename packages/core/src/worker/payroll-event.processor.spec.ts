@@ -6,6 +6,7 @@ import { EventStatus } from '@prisma/client';
 import { EventClaim } from '../processing/event-claim';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { EventStatusPublisher } from '../events/event-status.publisher';
+import { MetricsService } from '../telemetry/metrics.service';
 import { ConfigService } from '@nestjs/config';
 
 const ORG = 'org-a';
@@ -37,6 +38,13 @@ const OTHER_ORG = 'org-b';
 describe('PayrollEventProcessor', () => {
   let processor: PayrollEventProcessor;
 
+  const metrics = {
+    observeProcessing: jest.fn(),
+    recordAttempt: jest.fn(),
+    recordTerminal: jest.fn(),
+    recordSubmitted: jest.fn(),
+    recordWebhookDelivery: jest.fn(),
+  };
   const prisma = {
     payrollEvent: {
       updateMany: jest.fn(),
@@ -86,6 +94,7 @@ describe('PayrollEventProcessor', () => {
       eventClaim as unknown as EventClaim,
       heartbeat as unknown as HeartbeatService,
       streamPublisher as unknown as EventStatusPublisher,
+      metrics as unknown as MetricsService,
     );
     // Delegate the transactional lifecycle to EventClaim; default = success.
     eventClaim.claimAndProcess.mockResolvedValue({

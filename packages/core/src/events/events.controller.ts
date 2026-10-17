@@ -11,6 +11,7 @@ import {
 import {
   ApiBearerAuth,
   ApiBadRequestResponse,
+  ApiForbiddenResponse,
   ApiBody,
   ApiConflictResponse,
   ApiHeader,
@@ -26,6 +27,8 @@ import {
 import { Response } from 'express';
 import { EventType } from '@repo/shared';
 import { AuthenticatedActor } from '../auth/authenticated-actor';
+import { ApiRoles, Roles } from '../auth/decorators/roles.decorator';
+import { MembershipRole } from '@prisma/client';
 import { CurrentActor } from '../auth/decorators/current-actor.decorator';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { IdempotencyKey } from '../common/idempotency/idempotency-key.decorator';
@@ -206,6 +209,9 @@ export class EventsController {
    * other state is a 409; another organization's event reads as 404, identical
    * to an unknown id, and the acting user is recorded in the action audit.
    */
+  @ApiForbiddenResponse({ description: 'Requires the ADMIN role or higher', type: ErrorResponseDto })
+  @Roles(MembershipRole.ADMIN)
+  @ApiRoles(MembershipRole.ADMIN)
   @Post(':id/retry')
   @HttpCode(200)
   @ApiOperation({
@@ -251,6 +257,9 @@ export class EventsController {
    * touched here. Any other state is a 409; another organization's event reads
    * as 404; the acting user is recorded in the action audit.
    */
+  @ApiForbiddenResponse({ description: 'Requires the ADMIN role or higher', type: ErrorResponseDto })
+  @Roles(MembershipRole.ADMIN)
+  @ApiRoles(MembershipRole.ADMIN)
   @Post(':id/cancel')
   @HttpCode(200)
   @ApiOperation({

@@ -5,6 +5,7 @@ import { DepartmentChangeHandler } from './department-change.handler';
 import { SalaryChangeHandler } from './salary-change.handler';
 import { EmployeeDomainStateWriter } from '../employee-domain-state.writer';
 import { FailureConfig, SimulatedPayrollProvider } from '../simulated-payroll-provider';
+import { ProviderResolverService } from '../provider-resolver.service';
 import { HandlerInput, EventType, TransientPayrollFailureError } from '@repo/shared';
 /**
  * Per-type handler tests use the real provider with the deterministic
@@ -25,6 +26,11 @@ describe('per-type processing handlers', () => {
   const transientProvider = new SimulatedPayrollProvider(
     new FailureConfig(0, 0, 'always-transient'),
   );
+
+  /** Handlers inject the RESOLVER (real-provider-adapter design D1); the
+   *  fixture resolves everything to the wired simulated provider. */
+  const asResolver = (provider: SimulatedPayrollProvider): ProviderResolverService =>
+    ({ for: async () => ({ kind: 'simulated' as const, provider }) }) as unknown as ProviderResolverService;
 
   let tx: { employeeDomainState: { create: jest.Mock } };
   let writer: EmployeeDomainStateWriter;
@@ -51,7 +57,7 @@ describe('per-type processing handlers', () => {
   const persisted = (): unknown => tx.employeeDomainState.create.mock.calls[0][0];
 
   it('bank account change acknowledges the iban and persists BANK_ACCOUNT state', async () => {
-    const handler = new BankAccountChangeHandler(successProvider, writer);
+    const handler = new BankAccountChangeHandler(asResolver(successProvider), writer);
     const result = await handler.handle(
       input(EventType.BANK_ACCOUNT_CHANGE, {
         employeeId: 'emp-1',
@@ -80,7 +86,7 @@ describe('per-type processing handlers', () => {
   });
 
   it('address change acknowledges all supplied address fields and persists ADDRESS state', async () => {
-    const handler = new AddressChangeHandler(successProvider, writer);
+    const handler = new AddressChangeHandler(asResolver(successProvider), writer);
     const payload = {
       employeeId: 'emp-2',
       effectiveDate: '2026-09-01',
@@ -120,7 +126,7 @@ describe('per-type processing handlers', () => {
   });
 
   it('salary change acknowledges newSalary and currency and persists COMPENSATION state', async () => {
-    const handler = new SalaryChangeHandler(successProvider, writer);
+    const handler = new SalaryChangeHandler(asResolver(successProvider), writer);
     const result = await handler.handle(
       input(EventType.SALARY_CHANGE, {
         employeeId: 'emp-3',
@@ -147,7 +153,7 @@ describe('per-type processing handlers', () => {
   });
 
   it('department change acknowledges the new department and persists DEPARTMENT state', async () => {
-    const handler = new DepartmentChangeHandler(successProvider, writer);
+    const handler = new DepartmentChangeHandler(asResolver(successProvider), writer);
     const result = await handler.handle(
       input(EventType.DEPARTMENT_CHANGE, {
         employeeId: 'emp-4',
@@ -182,22 +188,22 @@ describe('per-type processing handlers', () => {
     const cases = [
       [
         EventType.BANK_ACCOUNT_CHANGE,
-        new BankAccountChangeHandler(transientProvider, writer),
+        new BankAccountChangeHandler(asResolver(transientProvider), writer),
         { employeeId: 'emp-1', effectiveDate: '2026-09-01', iban: 'DE89370400440532013000' },
       ],
       [
         EventType.ADDRESS_CHANGE,
-        new AddressChangeHandler(transientProvider, writer),
+        new AddressChangeHandler(asResolver(transientProvider), writer),
         { employeeId: 'emp-2', effectiveDate: '2026-09-01', street: 'Main St', city: 'Berlin', postalCode: '10115', country: 'DE' },
       ],
       [
         EventType.SALARY_CHANGE,
-        new SalaryChangeHandler(transientProvider, writer),
+        new SalaryChangeHandler(asResolver(transientProvider), writer),
         { employeeId: 'emp-3', effectiveDate: '2026-09-01', newSalary: 75000, currency: 'EUR' },
       ],
       [
         EventType.DEPARTMENT_CHANGE,
-        new DepartmentChangeHandler(transientProvider, writer),
+        new DepartmentChangeHandler(asResolver(transientProvider), writer),
         { employeeId: 'emp-4', effectiveDate: '2026-09-01', newDepartment: 'Engineering' },
       ],
     ] as const;

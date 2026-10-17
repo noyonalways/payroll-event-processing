@@ -1,7 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import { DEMO_FAIL_THRESHOLD_ATTEMPT, DEMO_PACING_MAX_MS, DEMO_PACING_MIN_MS, DEMO_RECOVER_THRESHOLD_ATTEMPT, demoScenarioFor, PermanentPayrollFailureError, TransientPayrollFailureError } from '@repo/shared';/** How the simulated provider decides each call's outcome (design D2). */
+import { DEMO_FAIL_THRESHOLD_ATTEMPT, DEMO_PACING_MAX_MS, DEMO_PACING_MIN_MS, DEMO_RECOVER_THRESHOLD_ATTEMPT, demoScenarioFor, PermanentPayrollFailureError, TransientPayrollFailureError } from '@repo/shared';
+import {
+  ExternalPayrollOperation,
+  ExternalPayrollProvider,
+  ExternalPayrollResult,
+} from './external-payroll-provider';
+/** How the simulated provider decides each call's outcome (design D2). */
 export type PayrollFailureMode =
   | 'random'
   | 'always-success'
@@ -98,8 +104,21 @@ export interface SimulateContext {
  * confirmation (design D2).
  */
 @Injectable()
-export class SimulatedPayrollProvider {
+export class SimulatedPayrollProvider implements ExternalPayrollProvider {
   constructor(private readonly config: FailureConfig) {}
+
+  /**
+   * The seam entry (real-provider-adapter design D1): the DEFAULT provider —
+   * every organization without an active HTTP configuration resolves here.
+   * The operation's employee/attempt drive the demo levers exactly as before.
+   */
+  async apply(operation: ExternalPayrollOperation): Promise<ExternalPayrollResult> {
+    const result = await this.simulate({
+      employeeId: operation.employeeId,
+      attempt: operation.attempt,
+    });
+    return { reference: result.reference };
+  }
 
   async simulate(context: SimulateContext = {}): Promise<SimulatedCallResult> {
     const scenario = demoScenarioFor(context.employeeId);

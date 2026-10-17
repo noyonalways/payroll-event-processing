@@ -9,7 +9,15 @@ import {
   HttpExceptionFilter,
   logLevelsFor,
   setupSwagger,
+  initTracing,
+  initErrorTracking,
+  MetricsService,
 } from '@repo/core';
+
+// Tracing FIRST (before module graph construction — observability design D3).
+void initTracing();
+// Sentry next: DSN-gated, fail-soft; the API5xx filter captures through it.
+void initErrorTracking('api');
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -20,6 +28,14 @@ async function bootstrap() {
   });
 
   const configService = app.get(ConfigService);
+  // Throttle keys derive from the REAL client behind reverse proxies
+  // (auth-hardening design D3). Deployment topology is configuration.
+  if (configService.get<boolean>('TRUST_PROXY')) {
+    const expressApp = app.getHttpAdapter().getInstance() as {
+      set: (setting: string, value: boolean) => void;
+    };
+    expressApp.set('trust proxy', true);
+  }
   app.useLogger(logLevelsFor(configService.get<string>('LOG_LEVEL')));
   const port = configService.get<number>('PORT', 3000);
 
@@ -38,7 +54,9 @@ async function bootstrap() {
   );
 
   // Global exception filter — structured JSON error responses
-  app.useGlobalFilters(new HttpExceptionFilter());
+  // The filter is the exception-path metrics recorder (observability design
+  // D2) — it receives the process's registry.
+  app.useGlobalFilters(new HttpExceptionFilter(app.get(MetricsService)));
 
   // CORS for local frontend dev
   app.enableCors();

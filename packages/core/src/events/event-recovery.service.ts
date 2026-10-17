@@ -4,6 +4,8 @@ import { PrismaService } from '@repo/database';
 import { EventType } from '@repo/shared';
 import { PayrollEventQueueService } from '../queue/payroll-event-queue.service';
 import { EventStatusPublisher } from './event-status.publisher';
+import { WebhookOutboxWriter } from '../webhooks/webhook-outbox.writer';
+import { MetricsService } from '../telemetry/metrics.service';
 import { EventActionResponseDto } from './dto/event-action-response.dto';
 
 /**
@@ -39,6 +41,8 @@ export class EventRecoveryService {
     private readonly prisma: PrismaService,
     private readonly eventQueue: PayrollEventQueueService,
     private readonly streamPublisher: EventStatusPublisher,
+    private readonly webhookOutbox: WebhookOutboxWriter,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -177,6 +181,7 @@ export class EventRecoveryService {
       );
     }
 
+    const cancelledAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.payrollEvent.updateMany({
         where: {
@@ -194,6 +199,20 @@ export class EventRecoveryService {
       await tx.eventAction.create({
         data: { eventId: id, action: 'CANCEL', userId: actorId },
       });
+      // Cancel is a TERMINAL state, so its webhook delivery intents commit in
+      // the same transaction (integrator-webhooks: every terminal transition
+      // produces its intent). CANCELLED notifications carry neither result nor
+      // failure reason.
+      await this.webhookOutbox.write(tx, {
+        eventId: id,
+        organizationId,
+        employeeId: row.employeeId,
+        eventType: row.eventType,
+        sequence: Number(row.sequence),
+        status: 'CANCELLED',
+        occurredAt: cancelledAt.toISOString(),
+      });
+      this.metrics.recordTerminal(row.eventType, 'CANCELLED');
     });
 
     // Post-commit stream announcement (realtime-status design D3): the guarded

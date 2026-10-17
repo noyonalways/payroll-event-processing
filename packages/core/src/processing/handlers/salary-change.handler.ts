@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DomainKind, Prisma } from '@prisma/client';
 import { PayrollEventStrategy } from '../payroll-event.strategy';
 import { HandlerInput, ProcessingResult } from '@repo/shared';
-import { SimulatedPayrollProvider } from '../simulated-payroll-provider';
+import { ProviderResolverService } from '../provider-resolver.service';
 import { EmployeeDomainStateWriter } from '../employee-domain-state.writer';
 
 interface SalaryChangePayload {
@@ -15,7 +15,7 @@ interface SalaryChangePayload {
 @Injectable()
 export class SalaryChangeHandler implements PayrollEventStrategy {
   constructor(
-    private readonly provider: SimulatedPayrollProvider,
+    private readonly providerResolver: ProviderResolverService,
     private readonly stateWriter: EmployeeDomainStateWriter,
   ) {}
 
@@ -31,8 +31,15 @@ export class SalaryChangeHandler implements PayrollEventStrategy {
     tx: Prisma.TransactionClient,
   ): Promise<ProcessingResult> {
     const payload = input.payload as unknown as SalaryChangePayload;
-    const { reference } = await this.provider.simulate({
+    const { kind, provider } = await this.providerResolver.for(input.organizationId);
+    void kind;
+    const { reference } = await provider.apply({
+      organizationId: input.organizationId,
+      eventId: input.eventId,
+      eventType: input.eventType,
       employeeId: input.employeeId,
+      sequence: input.sequence,
+      payload: input.payload,
       attempt: input.attempt,
     });
     await this.stateWriter.record(tx, {

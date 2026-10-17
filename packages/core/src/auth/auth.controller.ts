@@ -1,7 +1,17 @@
-import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Post,
+} from '@nestjs/common';
+import {
+  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiGoneResponse,
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
@@ -12,10 +22,19 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
+import { Public } from './decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
+import { AUTH_THROTTLE } from './throttle.constants';
+import {
+  ForgotPasswordDto,
+  ResetPasswordDto,
+  ResetRequestAcknowledgementDto,
+} from './dto/reset-password.dto';
+import { DeadResetTokenError, PasswordResetService } from './password-reset.service';
 import { AuthService } from './auth.service';
 import { AuthenticatedActor } from './authenticated-actor';
 import { CurrentActor } from './decorators/current-actor.decorator';
-import { Public } from './decorators/public.decorator';
+
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -29,7 +48,10 @@ import { ActorIdentityDto, SessionResponseDto } from './dto/session-response.dto
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly passwordReset: PasswordResetService,
+  ) {}
 
   /**
    * POST /auth/register — creates a new organization with the caller as its OWNER
@@ -37,6 +59,7 @@ export class AuthController {
    * self-service way into an existing organization.
    */
   @Public()
+  @Throttle({ strict: AUTH_THROTTLE })
   @Post('register')
   @HttpCode(201)
   @ApiOperation({
@@ -61,6 +84,7 @@ export class AuthController {
    * organization.
    */
   @Public()
+  @Throttle({ strict: AUTH_THROTTLE })
   @Post('login')
   @HttpCode(200)
   @ApiOperation({
@@ -139,5 +163,59 @@ export class AuthController {
   })
   async me(@CurrentActor() actor: AuthenticatedActor): Promise<ActorIdentityDto> {
     return this.authService.me(actor);
+  }
+
+  /**
+   * POST /auth/forgot-password (auth-hardening): ALWAYS the same success
+   * response whether or not the email has an account — the anti-enumeration
+   * contract. For existing accounts a single-use reset token is minted and
+   * returned for OUT-OF-BAND hand-off (no email infrastructure in scope).
+   */
+  @Public()
+  @Throttle({ strict: AUTH_THROTTLE })
+  @Post('forgot-password')
+  @HttpCode(202)
+  @ApiOperation({
+    summary: 'Request a password reset (public, anti-enumeration)',
+    description:
+      'Identical response for known and unknown emails. For existing accounts, a single-use ' +
+      'reset token (30-minute validity) is returned for out-of-band hand-off to the account owner.',
+  })
+  @ApiAcceptedResponse({ description: 'Always this response, account-known or not' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<ResetRequestAcknowledgementDto> {
+    const result = await this.passwordReset.requestReset(dto.email);
+    return { token: result.token };
+  }
+
+  /**
+   * POST /auth/reset-password (public, token-gated): completes the reset —
+   * new digest + FAMILY-WIDE refresh revocation + lockout clear. Every dead
+   * token (unknown/expired/used) is the SAME opaque 410.
+   */
+  @Public()
+  @Throttle({ strict: AUTH_THROTTLE })
+  @Post('reset-password')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Complete a password reset (public; the token is the credential)',
+    description:
+      'Sets the new password, revokes every live refresh token of the account, and clears any ' +
+      'login lockout. Unknown, expired, or already-used tokens are indistinguishable (410).',
+  })
+  @ApiNoContentResponse({ description: 'Password reset; sessions revoked' })
+  @ApiBadRequestResponse({ description: 'Validation error (weak password, missing token)', type: ErrorResponseDto })
+  @ApiGoneResponse({ description: 'Opaque: unknown, expired, or already-used token' })
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
+    try {
+      await this.passwordReset.reset(dto.token, dto.password);
+    } catch (error) {
+      if (error instanceof DeadResetTokenError) {
+        throw new HttpException(
+          'Reset token is no longer valid',
+          HttpStatus.GONE,
+        );
+      }
+      throw error;
+    }
   }
 }

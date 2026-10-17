@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   UnauthorizedException,
-  BadRequestException,
 } from '@nestjs/common';
 import { Membership, MembershipRole, Organization, Prisma, User } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -15,6 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ActorIdentityDto, SessionResponseDto } from './dto/session-response.dto';
 import { PasswordService } from './password.service';
+import { ConfigService } from '@nestjs/config';
 import { IssuedSession, TokenService } from './token.service';
 
 /** Maximum attempts to find an unused organization slug before giving up. */
@@ -48,6 +51,7 @@ export class AuthService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
   ) {}
@@ -81,6 +85,53 @@ export class AuthService {
     return this.toSessionResponse(session, membership);
   }
 
+  /**
+   * The lockout knobs (auth-hardening design D1). Threshold/cool-down are
+   * configuration; the 429 shape is deliberately a ThrottlerException-lookalike
+   * with Retry-After so a LOCKED account and a throttled IP are body-identical
+   * — while an unknown email (not lockable, nothing to count) keeps the plain
+   * credential-failure response, preserving the no-enumeration contract.
+   */
+  private static readonly LOCK_THRESHOLD = 5;
+  private static readonly LOCK_MINUTES_DEFAULT = 15;
+
+  private lockThreshold(): number {
+    return this.config.get<number>('AUTH_LOCKOUT_THRESHOLD') ?? AuthService.LOCK_THRESHOLD;
+  }
+
+  private lockMs(): number {
+    const minutes =
+      this.config.get<number>('AUTH_LOCKOUT_MINUTES') ?? AuthService.LOCK_MINUTES_DEFAULT;
+    return minutes * 60 * 1000;
+  }
+
+  /** 429 with Retry-After — the ONLY lock signal, never leak account state. */
+  private lockedReject(retryAfterSeconds: number): never {
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Too many requests',
+        error: 'ThrottlerException',
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+      { cause: { retryAfterSeconds } },
+    );
+  }
+
+  private async assertNotLocked(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { lockedUntil: true },
+    });
+    if (user?.lockedUntil && user.lockedUntil > new Date()) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000),
+      );
+      this.lockedReject(retryAfterSeconds);
+    }
+  }
+
   async login(dto: LoginDto): Promise<SessionResponseDto> {
     const email = this.normalizeEmail(dto.email);
     const user = await this.prisma.user.findUnique({ where: { email } });
@@ -90,10 +141,16 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    // Lockout FIRST (auth-hardening): a locked account refuses even the
+    // correct password — with the same 429 shape as an IP throttle.
+    await this.assertNotLocked(user.id);
+
     const passwordMatches = await this.passwords.verify(dto.password, user.passwordHash);
     if (!passwordMatches) {
+      await this.recordLoginFailure(user.id);
       throw new UnauthorizedException('Invalid email or password');
     }
+    await this.clearLoginFailures(user.id);
 
     const membership = await this.resolveMembership(user.id, dto.organizationId);
     const session = await this.tokens.issueSession(
@@ -245,6 +302,35 @@ export class AuthService {
    * needs no hint; an account in several must name one, rather than having a
    * tenant silently chosen for it.
    */
+  /** Records one failure; locks at the threshold (unguarded increment is fine:
+   *  a concurrent race only over-counts by one failure — the lock outcome is
+   *  identical). */
+  private async recordLoginFailure(userId: string): Promise<void> {
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { failedLoginCount: { increment: 1 } },
+      select: { failedLoginCount: true },
+    });
+    if (updated.failedLoginCount >= this.lockThreshold()) {
+      const lockedUntil = new Date(Date.now() + this.lockMs());
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { lockedUntil },
+      });
+      this.logger.warn(
+        `Account ${userId} locked until ${lockedUntil.toISOString()} after ` +
+          `${updated.failedLoginCount} failed logins`,
+      );
+    }
+  }
+
+  private async clearLoginFailures(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { failedLoginCount: 0, lockedUntil: null },
+    });
+  }
+
   private async resolveMembership(
     userId: string,
     requestedOrganizationId?: string,

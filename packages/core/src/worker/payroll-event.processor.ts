@@ -13,6 +13,12 @@ import { WORKER_OPTIONS } from '@repo/database';
 import { EventClaim } from '../processing/event-claim';
 import { HeartbeatService } from '../processing/heartbeat.service';
 import { EventStatusPublisher } from '../events/event-status.publisher';
+import { MetricsService } from '../telemetry/metrics.service';
+import {
+  TRACE_CONTEXT_KEY,
+  withJobSpan,
+} from '../telemetry/tracing';
+import { captureError } from '../telemetry/error-tracking';
 /**
  * Consumes `payroll-events` jobs and drives the event lifecycle:
  *
@@ -68,6 +74,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     private readonly eventClaim: EventClaim,
     private readonly heartbeat: HeartbeatService,
     private readonly streamPublisher: EventStatusPublisher,
+    private readonly metrics: MetricsService,
   ) {
     super();
     this.maxRetryAttempts = this.config.get<number>('PAYROLL_MAX_RETRY_ATTEMPTS', 5);
@@ -112,6 +119,12 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
    * Mid-retry calls (attemptsMade < maxAttempts) are pure no-ops — the claim
    * transaction abort already rolled the row back to `queued`.
    */
+  /** BullMX stalled-job detections: the queue-level counter for alerting. */
+  @OnWorkerEvent('stalled')
+  onStalled(): void {
+    this.metrics.recordStalled();
+  }
+
   @OnWorkerEvent('failed')
   async onFailed(job: Job<PayrollEventJobInput>, error: Error): Promise<void> {
     if (job.name !== PAYROLL_EVENT_JOB) {
@@ -161,6 +174,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
       `Processing ${eventType} event ${eventId} for employee ${employeeId} ` +
         `(seq ${sequence}, attempts exhausted after ${job.attemptsMade}, worker ${this.workerPid}) — exhausted: ${error.message}`,
     );
+    captureError(error, { eventId, organizationId, kind: 'retries-exhausted' });
     // Post-commit stream announcement (D3): the exhaustion transaction
     // committed `queued → failed` — the terminal state is announced here, and
     // only here (mid-retry failures commit nothing).
@@ -227,16 +241,35 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
     );
 
     // 3. Transactional claim → dispatch → terminal write (EventClaim, D1). The
-    //    outcome carries the source of each structured log line.
+    //    outcome carries the source of each structured log line. The duration
+    //    histogram wraps the whole claim (observability design D2), fail-soft.
+    const claimStarted = process.hrtime.bigint();
     try {
-      const outcome = await this.eventClaim.claimAndProcess({
-        eventId,
-        organizationId,
-        eventType,
-        employeeId,
-        sequence,
-        attempt,
-      });
+      const outcome = await withJobSpan(
+          eventType,
+          eventId,
+          organizationId,
+          (job.data as unknown as Record<string, unknown>)[TRACE_CONTEXT_KEY] as
+            | Record<string, string>
+            | undefined,
+          () =>
+            this.eventClaim.claimAndProcess({
+              eventId,
+              organizationId,
+              eventType,
+              employeeId,
+              sequence,
+              attempt,
+            }),
+        );
+      try {
+        this.metrics.observeProcessing(
+          eventType,
+          Number(process.hrtime.bigint() - claimStarted) / 1e9,
+        );
+      } catch {
+        // metrics never break processing
+      }
 
       switch (outcome.outcome) {
         case 'skipped':
@@ -254,6 +287,11 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
           // Post-commit announcement (D3): the terminal `failed` write COMMITTED
           // inside the claim transaction — announce only now, never from within.
           this.announce(job.data, 'failed');
+          captureError(new Error(outcome.reason), {
+            eventId,
+            organizationId,
+            kind: 'permanent-failure',
+          });
           return;
         case 'success':
           this.logger.log(
@@ -319,6 +357,7 @@ export class PayrollEventProcessor extends WorkerHost implements OnModuleDestroy
           failedReason: this.errorMessage(error),
         },
       });
+      this.metrics.recordAttempt('TRANSIENT');
     } catch (recordError) {
       this.logger.error(
         `Failed to record transient attempt ${attemptNumber} for event ${eventId}: ` +

@@ -5,6 +5,8 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 
@@ -38,7 +40,13 @@ import { TokenService } from './token.service';
     AuthService,
     TokenService,
     PasswordService,
+    PasswordResetService,
+    // Guard ORDER is the security contract (role-enforcement design D1):
+    // authentication (401) → role gate (403); services keep tenant isolation
+    // (404). APP_GUARDs run in registration order, so RolesGuard registered
+    // here — after JwtAuthGuard — can never shadow the 401 semantics.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
   ],
   exports: [AuthService, TokenService, PasswordService],
 })

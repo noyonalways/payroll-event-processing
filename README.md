@@ -83,6 +83,8 @@ Event lifecycle: `received → queued → processing → success | failed`, plus
 | `POST /auth/refresh` | public | Rotate a refresh token into a new access/refresh pair. The presented token is single-use — replaying a consumed one revokes every live refresh token for that user (`401`). |
 | `POST /auth/logout` | public | Revoke the presented refresh token. Always `204`, even for an unknown or already-revoked token. |
 | `GET /auth/me` | `Authorization: Bearer <accessToken>` | The authenticated user, the organization their token is scoped to, and their role there. |
+| `POST /auth/forgot-password` | public | Anti-enumeration: ALWAYS the same response, known email or not. Existing accounts get a single-use reset token (30-min validity) for out-of-band hand-off. |
+| `POST /auth/reset-password` | public (token-gated) | Completes the reset: new digest + **every live refresh token of the account revoked** + lockout cleared. Unknown/expired/used tokens are one opaque `410`. |
 | `POST /events` | `Authorization: Bearer <accessToken>` | Submit an event. Also requires the `Idempotency-Key` header. Returns `201` with the stored response (duplicates replay it). |
 | `GET /events` | `Authorization: Bearer <accessToken>` | Read-only paginated event history: one page of the organization's events, newest first (`created_at DESC, id DESC`) as `{ data, nextCursor, limit }`. Combinable filters — `status`, `eventType`, `employeeId`, `createdAfter`/`createdBefore` (inclusive) — AND together and compose with the keyset cursor: pass a page's `nextCursor` back as `cursor` to keep walking without page shifts. Rows carry no payload, result, or attempts (that is `GET /events/:id`). `400` for invalid filter values, an out-of-range `limit` (1–100), or an unparsable cursor. |
 | `GET /events/:id` | `Authorization: Bearer <accessToken>` | Read-only event status: committed lifecycle state, details, and the attempt history (one row per attempt). `404` for unknown ids **and for an event belonging to another organization** — the two are indistinguishable. |
@@ -90,6 +92,19 @@ Event lifecycle: `received → queued → processing → success | failed`, plus
 | `POST /events/:id/retry` | `Authorization: Bearer <accessToken>` | Manual recovery: move a terminal `failed` event back to `queued` and schedule it again on its employee's chain. Attempt numbering is continuous across retry rounds (the trail keeps one row per attempt). `409` for any other lifecycle state, `404` for unknown/foreign ids. The action is effective even when Redis is unreachable (the relay schedules it later). |
 | `POST /events/:id/cancel` | `Authorization: Bearer <accessToken>` | Manual recovery: cancel a pending (`received`/`queued`) event. `cancelled` is terminal — a job that later surfaces for it is a no-op, and the employee's chain keeps draining behind it. `409` for any other state, `404` for unknown/foreign ids. |
 | `GET /health` | public | Service health: DB + Redis reachability, worker liveness heartbeats, BullMQ stalled-job count. Always `200`; the body carries `status: ok \| degraded`. |
+| `POST /webhook-endpoints` | `Authorization: Bearer <accessToken>` | Register one HTTPS webhook endpoint for the organization. The response is the ONLY place the HMAC-SHA256 signing secret is ever returned. `409` for a duplicate label, `400` for a non-HTTPS URL (loopback `http://` allowed for local receivers). |
+| `GET /webhook-endpoints` | `Authorization: Bearer <accessToken>` | List the organization's endpoints (never the secrets). |
+| `PATCH /webhook-endpoints/:id` | `Authorization: Bearer <accessToken>` | Update label/URL/active flag. Deactivating stops new delivery intents; pending rows drain once reactivated. |
+| `DELETE /webhook-endpoints/:id` | `Authorization: Bearer <accessToken>` | Remove the endpoint; its pending deliveries are dead-lettered with `endpoint_removed` in the same transaction. |
+| `GET /webhook-deliveries/:id` | `Authorization: Bearer <accessToken>` | One delivery: lifecycle state (`pending \| delivered \| dead-lettered`), the snapshotted payload, and the append-only POST attempt trail. |
+| `GET /webhook-endpoints/:id/deliveries` | `Authorization: Bearer <accessToken>` | An endpoint's deliveries, newest first. |
+| `GET /members` | `Authorization: Bearer <accessToken>` | The organization's roster with roles (any member reads it). |
+| `PATCH /members/:userId/role` | `Authorization: Bearer <accessToken>` (OWNER) | Change a member's role. The last `OWNER` cannot be demoted (`409`); live sessions adopt the change at next refresh. |
+| `DELETE /members/:userId` | `Authorization: Bearer <accessToken>` (OWNER) | Remove a member — not yourself, not the last `OWNER`. The removed user's next refresh fails. |
+| `POST /invitations` | `Authorization: Bearer <accessToken>` (ADMIN+) | Invite an email with role `ADMIN`/`MEMBER` (never `OWNER`). The response carries the single-use accept token — the only place it appears. |
+| `GET /invitations` | `Authorization: Bearer <accessToken>` (ADMIN+) | The organization's invitations, newest first (no tokens). |
+| `DELETE /invitations/:id` | `Authorization: Bearer <accessToken>` (ADMIN+) | Revoke a pending invitation; its token stops working immediately. |
+| `POST /invitations/accept` | public (token-gated) | Join by invitation: sets an initial password for a new email or verifies the existing account's password. Every unusable token is the same opaque `410`. After acceptance, log in with the email + organization id from the response. |
 | `GET /api-docs` | public | Swagger UI (interactive). Raw spec at `/api-docs-json`. |
 
 A protected route without a valid, unexpired access token returns `401`; the same applies to a
@@ -109,8 +124,9 @@ a request body field, query parameter, or header cannot steer it.
 **Identity and sessions**
 
 - `POST /auth/register` creates a **new** organization, the user account, and an `OWNER`
-  membership in one transaction; the registrant is that owner. There is no self-service way into
-  an existing organization — invitations are a later change.
+  membership in one transaction; the registrant is that owner. A second member joins through
+  **invitations** (`POST /invitations` by an `ADMIN`+, single-use token accepted at
+  `POST /invitations/accept` — tokens are hashed like refresh tokens and shown once).
 - **Access tokens** are short-lived signed JWTs (`AUTH_ACCESS_TOKEN_TTL`, default `15m`) carrying
   the user, the organization, and the role. Verification is stateless, so the guard costs no
   database round-trip.
@@ -125,6 +141,12 @@ a request body field, query parameter, or header cannot steer it.
 - **Cross-organization access is a `404`**, exactly like an unknown id: a `403` would confirm the
   identifier exists elsewhere. Login follows the same rule — a wrong password, an unknown email,
   and an organization the account does not belong to all produce the same `401`.
+- **Hardening (auth-hardening)**: repeated failed logins **lock the account** (`AUTH_LOCKOUT_THRESHOLD`, default 5 → `429` with `Retry-After`; locked accounts refuse even the correct password — never leaking account existence, unknown emails keep the plain `401`). The unauthenticated credential routes (`login`, `register`, `forgot/reset-password`, `accept`) are **rate limited** per client (`AUTH_THROTTLE_*` strict profile; `DEFAULT_THROTTLE_*` generous elsewhere; `/health` + `/metrics` exempt). The worker **sweeps expired auth tokens** on a schedule — revoked refresh tombstones age out after `AUTH_TOKEN_RETENTION_DAYS`.
+- **Role enforcement (RBAC)**: the `OWNER > ADMIN > MEMBER` hierarchy is enforced by a second
+  global guard. Reads, event submission, and session routes stay open to every member; recovery
+  actions (`retry`/`cancel`), employee mutations, and webhook-endpoint configuration require
+  `ADMIN` or higher (`403` otherwise, before any service logic runs). Gated routes advertise the
+  requirement in Swagger via the `x-required-role` extension and a `403` response reference.
 
 **Tenant-local identifiers**
 
@@ -652,6 +674,57 @@ each are in `docs/architecture.md`; the shape:
    `maxStalledCount` 1) and its job re-queued; the guarded claim makes reprocessing safe.
 5. **Liveness** — each worker upserts a heartbeat row; `/health` reports `degraded` when any
    heartbeat is older than `HEALTH_WORKER_STALE_MS` or BullMQ reports stalled jobs.
+
+### Observability (metrics, tracing, error tracking)
+
+- `GET /metrics` (API, public like `/health`) and a worker listener on
+  `WORKER_METRICS_PORT` (default 9101) expose `payroll_*` Prometheus series:
+  HTTP requests/durations by route pattern, event lifecycle counters
+  (submitted/terminal/attempt classes), processing duration, queue depth
+  gauges, stalled detection, stale heartbeats, and webhook delivery outcomes.
+  **Bounded-cardinality labels only** — never organization/employee/event ids.
+- **Tracing**: `OTEL_TRACES_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT`
+  enables OpenTelemetry (HTTP, Prisma, Redis/BullMQ auto-instrumentation);
+  event trace context rides the job payload (best-effort). OFF by default.
+- **Error tracking**: `SENTRY_DSN` enables Sentry capture of 5xx responses,
+  terminal processing failures, and relay crashes — PII-scrubbed, identifiers
+  as tags. OFF by default.
+- `docker compose --profile observability up` additionally runs Prometheus
+  (with `monitoring/rules.yml` alert rules), Grafana (provisioned starter
+  dashboard), and Jaeger (OTLP). Runbook: `monitoring/README.md`.
+
+### External payroll provider (real-provider-adapter)
+
+Handlers dispatch the external payroll operation through the provider resolved for the event's
+organization — the **simulated** provider by default, or an **HTTP adapter** when an `OWNER`
+activates `PUT /provider-config`. The resolver RE-reads the configuration per event, so switching
+providers needs no restart. The HTTP contract (implement this to integrate a real system):
+
+- `POST {baseUrl}` with `Authorization: Bearer <credential>` and JSON body
+  `{ eventId, organizationId, employeeId, eventType, sequence, payload, attempt }`.
+- Respond `2xx` with `{ "reference": "<non-empty>" }` within the timeout
+  (`PROVIDER_HTTP_TIMEOUT_MS`, default 10 s) — the reference is stored on the event result and
+  licenses the domain-state write.
+- `4xx` ⇒ **permanent** failure (the row commits `failed` with the rejection reason; no retry).
+- Network errors / timeouts / `5xx` ⇒ **transient** (claim rolls back; BullMQ retries with
+  backoff). Responses echoing the credential are scrubbed from failure reasons.
+
+### Webhook delivery (integrator-webhooks)
+
+Every **terminal commit** (`success`, `failed`, `cancelled`) also writes a `webhook_deliveries`
+outbox row **inside the same transaction** for each active endpoint — a transition commits with
+its notification intent or not at all. A poll-based relay (worker-only, `FOR UPDATE SKIP LOCKED`,
+`WEBHOOK_RELAY_INTERVAL_MS`) POSTs the snapshotted payload with these headers:
+
+- `X-Payroll-Signature: sha256=<hex>` — HMAC-SHA256 over the exact raw body bytes, keyed with the
+  endpoint's secret (returned once at `POST /webhook-endpoints`; verify before trusting).
+- `X-Payroll-Delivery` / `X-Payroll-Event` / `X-Payroll-Timestamp` — delivery id, event id
+  (dedupe on `eventId` + `status` — delivery is **at-least-once**), and an ISO-8601 timestamp.
+
+`2xx` within the timeout acknowledges; `4xx` dead-letters permanently (`endpoint_rejected`);
+network errors/timeouts/`5xx` retry with exponential backoff (30 s doubling, default cap 8 via
+`WEBHOOK_RELAY_MAX_ATTEMPTS`) and then dead-letter (`retries_exhausted`). Every POST is audited
+in `webhook_delivery_attempts`. A delivery failure can never touch the event's committed state.
 
 ---
 

@@ -34,6 +34,10 @@ model Organization {
   refreshTokens       RefreshToken[]
   employeeDomainState EmployeeDomainState[]
   employees           Employee[]
+  webhookEndpoints    WebhookEndpoint[]
+  webhookDeliveries   WebhookDelivery[]
+  invitations         OrgInvitation[]
+  providerConfig      ProviderConfig?
 
   @@map("organizations")
 }
@@ -48,13 +52,40 @@ model User {
   /// scrypt digest (`scrypt$N$r$p$salt$hash`). Never a plaintext or reversible value.
   passwordHash String   @map("password_hash")
   name         String?
+  /// Consecutive failed logins — cleared on success and by a password reset
+  /// (auth-hardening design D1). NOT fed by registration/invitation failures.
+  failedLoginCount Int @default(0) @map("failed_login_count")
+  /// Future end of the current lockout; NULL when not locked. Login refuses
+  /// with 429 + Retry-After while this is in the future (structured body is
+  /// lock-agnostic, so account existence is never revealed).
+  lockedUntil  DateTime? @map("locked_until")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  memberships   Membership[]
-  refreshTokens RefreshToken[]
+  memberships         Membership[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
 
   @@map("users")
+}
+
+/// A single-use "forgot password" credential (auth-hardening design D2),
+/// mirroring the refresh/invitation token discipline: the raw token shown
+/// once (out-of-band hand-off), only its SHA-256 digest stored. Acceptance
+/// flips `usedAt` with a GUARDED transition — a token cannot redeem twice.
+/// Retention: the auth sweep deletes rows expired past the retention window.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 /// Membership role within ONE organization.
@@ -381,4 +412,198 @@ model WorkerHeartbeat {
   lastSeenAt DateTime @map("last_seen_at")
 
   @@map("worker_heartbeats")
+}
+
+// ─── Organization membership (org-membership-management) ─────────────────────
+
+/// Lifecycle of one organization invitation.
+enum OrgInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+/// An outstanding "join this organization" offer (org-membership-management
+/// design D1): one email + one initial role (ADMIN or MEMBER — OWNER invites
+/// are rejected by the service, never stored), handed out-of-band as a
+/// single-use accept token. The RAW token is shown exactly once (create
+/// response / accept URL); only its SHA-256 digest is stored, mirroring
+/// `refresh_tokens`. One PENDING invitation per (organization, email) is a
+/// service-layer invariant guarded transactionally — a plain UNIQUE across
+/// statuses would block legitimate re-invites after revoke/accepted-expiry.
+/// Acceptance flips the row out of PENDING with a guarded transition, so a
+/// token can never redeem twice (the loser of a race matches 0 rows and
+/// 409s without creating a membership).
+model OrgInvitation {
+  id               String             @id @default(uuid())
+  organizationId   String             @map("organization_id")
+  /// Stored lowercased; the invitee identity at acceptance time.
+  email            String
+  role             MembershipRole
+  /// SHA-256 of the high-entropy raw accept token (never the token itself).
+  tokenHash        String             @unique @map("token_hash")
+  status           OrgInvitationStatus @default(PENDING)
+  invitedBy        String             @map("invited_by")
+  expiresAt        DateTime           @map("expires_at")
+  acceptedAt       DateTime?          @map("accepted_at")
+  /// Snapshot of the user the membership landed on (null until acceptance).
+  acceptedByUserId String?            @map("accepted_by_user_id")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("org_invitations")
+}
+
+// ─── External payroll provider configuration (real-provider-adapter) ─────────
+
+/// Resolution mode for an organization's external payroll operation.
+enum ProviderMode {
+  /// The in-process simulated provider (default; demo levers keep working).
+  SIMULATED
+  /// The HTTP adapter against the organization's configured endpoint.
+  HTTP
+}
+
+/// Per-organization external payroll provider configuration
+/// (real-provider-adapter design D2): ONE row per organization (the unique
+/// FK IS the resolution key). `credential` is stored recoverable — sent as
+/// the authorization header on every external call — and returned in full
+/// exactly once, by the write response that set it; reads redact. Deleting
+/// the row (or mode=SIMULATED) resolves the simulated provider again; the
+/// resolver RE-READS per operation, so changes apply without a restart.
+model ProviderConfig {
+  id             String       @id @default(uuid())
+  organizationId String       @unique @map("organization_id")
+  mode           ProviderMode
+  /// Target endpoint for HTTP mode (https for public use; loopback http is
+  /// accepted the same way webhook URLs are, for local receivers).
+  baseUrl        String?      @map("base_url")
+  credential     String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("provider_configs")
+}
+
+// ─── Webhook delivery (integrator-webhooks) ──────────────────────────────────
+
+/// A registered HTTPS callback for ONE organization. Deliveries snapshot
+/// `url` at intent-creation time (see WebhookDelivery), so changing or
+/// deleting the endpoint never rewrites committed delivery history; the
+/// `secret` is stored recoverable because every future delivery must be
+/// signed with it — it is returned in full exactly once, at creation.
+model WebhookEndpoint {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  /// Organization-unique label for humans; not part of delivery semantics.
+  label          String
+  /// https:// callback URL. Validated at the DTO + service layer.
+  url            String
+  /// Signing secret (32 random bytes, base64). Recoverable on purpose —
+  /// required to sign every future delivery; never exposed after create.
+  secret         String
+  /// An inactive endpoint receives no NEW intents (the outbox writer reads
+  /// active rows only); its pending deliveries drain once reactivated.
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@unique([organizationId, label])
+  @@index([organizationId, active])
+  @@map("webhook_endpoints")
+}
+
+/// Delivery lifecycle states. PENDING rows are the relay's due set
+/// (next_attempt_at nullable-or-past); DELIVERED once the endpoint
+/// acknowledged 2xx; DEAD_LETTERED when the endpoint rejected permanently,
+/// retries exhausted, or the endpoint was removed before redelivery.
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  DEAD_LETTERED
+}
+
+/// The terminal event state a notification announces. An event CAN produce
+/// several rows over its life (failed → retried → failed again or → success):
+/// every terminal COMMITS is its own notification. There is deliberately no
+/// unique constraint across events — each terminal transition is distinct.
+enum WebhookTerminalStatus {
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+/// Transactional-outbox intent (integrator-webhooks design D3): one row per
+/// (active endpoint, terminal commit), created INSIDE the same transaction
+/// that commits the terminal payroll_events transition — the intent commits
+/// with the state or not at all. `payload` is a PRE-RENDERED snapshot; later
+/// result/config changes never rewrite committed notification history.
+/// `url` is snapshotted from the endpoint at creation so history survives
+/// endpoint deletion; the endpoint FK (SetNull) keeps the pointer when it is
+/// still meaningful. Delivery itself is AT-LEAST-ONCE: a relay crash between
+/// successful POST and the acknowledgement commit redelivers, and consumers
+/// deduplicate on payload eventId + status.
+model WebhookDelivery {
+  id                String                 @id @default(uuid())
+  organizationId    String                 @map("organization_id")
+  webhookEndpointId String?                @map("webhook_endpoint_id")
+  eventId           String                 @map("event_id")
+  terminalStatus    WebhookTerminalStatus  @map("terminal_status")
+  payload           Json                   @db.JsonB
+  /// Snapshot of the endpoint URL at intent-creation time.
+  url               String
+  status            WebhookDeliveryStatus  @default(PENDING)
+  /// 1-based POST attempts made so far (0 while untouched).
+  attempts          Int                    @default(0)
+  /// Due-again time for the relay's backoff; NULL for never/terminal rows.
+  nextAttemptAt     DateTime?              @map("next_attempt_at")
+  deliveredAt       DateTime?              @map("delivered_at")
+  deadLetterReason  String?                @map("dead_letter_reason")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  endpoint     WebhookEndpoint?           @relation(fields: [webhookEndpointId], references: [id], onDelete: SetNull)
+  deliveryAttempts WebhookDeliveryAttempt[]
+
+  // The relay's due scan: equality prefix on status with next_attempt_at
+  // filtered in WHERE; row-locked claiming uses the same shape.
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@map("webhook_deliveries")
+}
+
+/// Outcome of one delivered POST attempt.
+enum WebhookDeliveryAttemptOutcome {
+  DELIVERED
+  FAILED
+}
+
+/// Append-only audit of every delivery POST (integrator-webhooks design D2,
+/// mirroring the event_attempts discipline): one row per attempt carrying the
+/// response status or the transport error. NEVER updated or deleted after
+/// creation — the attempt trail is the integrator's debugging surface.
+model WebhookDeliveryAttempt {
+  id            String                        @id @default(uuid())
+  deliveryId    String                        @map("delivery_id")
+  attemptNumber Int                           @map("attempt_number")
+  outcome       WebhookDeliveryAttemptOutcome
+  responseStatus Int?                         @map("response_status")
+  error         String?
+  createdAt     DateTime                      @default(now()) @map("created_at")
+
+  delivery WebhookDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, attemptNumber])
+  @@index([deliveryId])
+  @@map("webhook_delivery_attempts")
 }

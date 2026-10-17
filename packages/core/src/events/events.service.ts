@@ -7,6 +7,7 @@ import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { IDEMPOTENCY_SCOPE_EVENT_SUBMISSION, EventType } from '@repo/shared';
 import { PayloadValidator } from './payload.validator';
 import { EventStatusPublisher } from './event-status.publisher';
+import { MetricsService } from '../telemetry/metrics.service';
 import { EventStatusResponseDto } from './dto/event-status-response.dto';
 import {
   DEFAULT_PAGE_LIMIT,
@@ -142,6 +143,7 @@ export class EventsService {
     private readonly eventQueue: PayrollEventQueueService,
     private readonly idempotency: IdempotencyService,
     private readonly streamPublisher: EventStatusPublisher,
+    private readonly metrics: MetricsService,
   ) {}
 
   async createEvent(
@@ -198,6 +200,7 @@ export class EventsService {
     );
 
     if (submitted.eventId) {
+      this.metrics.recordSubmitted(input.eventType);
       this.logger.log(
         `Event ${submitted.eventId} persisted (${input.eventType}, employee ${employeeId}, organization ${organizationId})`,
       );

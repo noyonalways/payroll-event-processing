@@ -5,6 +5,7 @@ import { AddressChangeHandler } from './handlers/address-change.handler';
 import { DepartmentChangeHandler } from './handlers/department-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
 import { FailureConfig, SimulatedPayrollProvider } from './simulated-payroll-provider';
+import { ProviderResolverService } from './provider-resolver.service';
 import { EventType } from '@repo/shared';
 
 describe('HandlerRegistry', () => {
@@ -12,11 +13,16 @@ describe('HandlerRegistry', () => {
     new FailureConfig(0, 0, 'always-success'),
   );
   const writer = new EmployeeDomainStateWriter();
+  // Handlers inject the RESOLVER (real-provider-adapter design D1); the
+  // fixture resolves everything to the wired simulated provider.
+  const asResolver = {
+    for: async () => ({ kind: 'simulated' as const, provider }),
+  } as unknown as ProviderResolverService;
   const registry = new HandlerRegistry(
-    new BankAccountChangeHandler(provider, writer),
-    new AddressChangeHandler(provider, writer),
-    new SalaryChangeHandler(provider, writer),
-    new DepartmentChangeHandler(provider, writer),
+    new BankAccountChangeHandler(asResolver, writer),
+    new AddressChangeHandler(asResolver, writer),
+    new SalaryChangeHandler(asResolver, writer),
+    new DepartmentChangeHandler(asResolver, writer),
   );
 
   it('resolves a distinct handler for each supported event type', () => {

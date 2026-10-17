@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { PAYROLL_EVENTS_QUEUE, PAYROLL_EVENT_JOB } from '@repo/shared';
+import { TRACE_CONTEXT_KEY, traceContextForJob } from '../telemetry/tracing';
 
 export interface PayrollEventJobInput {
   eventId: string;
@@ -91,7 +92,17 @@ export class PayrollEventQueueService implements OnModuleDestroy {
    */
   async enqueue(input: PayrollEventJobInput): Promise<void> {
     const data: PayrollEventJobData = { ...input };
-    const job = await this.queue.add(PAYROLL_EVENT_JOB, data, {
+    // Best-effort trace propagation (observability design D3): an additive
+    // optional key on the payload; `null`/absence when tracing is disabled.
+    // The injection can NEVER throw here — and R2 still holds: the enqueue's
+    // 2 s ceiling and swallow cover everything.
+    const traceContext = traceContextForJob();
+    // The context rides IN the job data (an additive optional key), never in
+    // job opts — BullMQ does not preserve unknown opts keys.
+    const payload = (
+      traceContext ? { ...data, [TRACE_CONTEXT_KEY]: traceContext } : data
+    ) as PayrollEventJobData;
+    const job = await this.queue.add(PAYROLL_EVENT_JOB, payload, {
       jobId: perEmployeeJobId(input.organizationId, input.employeeId),
       attempts: this.maxRetryAttempts,
       backoff: { type: 'exponential', delay: this.retryBaseDelayMs },

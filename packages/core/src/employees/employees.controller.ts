@@ -12,6 +12,7 @@ import {
 import {
   ApiBearerAuth,
   ApiBadRequestResponse,
+  ApiForbiddenResponse,
   ApiConflictResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
@@ -23,6 +24,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthenticatedActor } from '../auth/authenticated-actor';
+import { ApiRoles, Roles } from '../auth/decorators/roles.decorator';
+import { MembershipRole } from '@prisma/client';
 import { CurrentActor } from '../auth/decorators/current-actor.decorator';
 import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -50,6 +53,9 @@ export class EmployeesController {
    * a duplicate (including an archived row's reserved number) is rejected by
    * the store, never guessed at here (design D4).
    */
+  @ApiForbiddenResponse({ description: 'Requires the ADMIN role or higher', type: ErrorResponseDto })
+  @Roles(MembershipRole.ADMIN)
+  @ApiRoles(MembershipRole.ADMIN)
   @Post()
   @HttpCode(201)
   @ApiOperation({
@@ -159,6 +165,9 @@ export class EmployeesController {
    * change it is rejected with a structured 400 by the global pipe — the
    * number is the immutable cross-reference between events and the directory.
    */
+  @ApiForbiddenResponse({ description: 'Requires the ADMIN role or higher', type: ErrorResponseDto })
+  @Roles(MembershipRole.ADMIN)
+  @ApiRoles(MembershipRole.ADMIN)
   @Patch(':id')
   @ApiOperation({
     summary: 'Correct an employee’s details',
@@ -202,6 +211,9 @@ export class EmployeesController {
    * references it remains readable and unchanged. Idempotent — archiving an
    * already-archived employee answers 204 again.
    */
+  @ApiForbiddenResponse({ description: 'Requires the ADMIN role or higher', type: ErrorResponseDto })
+  @Roles(MembershipRole.ADMIN)
+  @ApiRoles(MembershipRole.ADMIN)
   @Delete(':id')
   @HttpCode(204)
   @ApiOperation({

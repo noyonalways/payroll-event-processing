@@ -1,0 +1,43 @@
+{
+  "title": "Payroll Events — starter",
+  "uid": "payroll-starter",
+  "schemaVersion": 41,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Queue depth (waiting + delayed)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(payroll_queue_jobs{state=\"waiting\"})", "legendFormat": "waiting" },
+        { "expr": "sum(payroll_queue_jobs{state=\"delayed\"})", "legendFormat": "delayed" },
+        { "expr": "sum(payroll_queue_jobs{state=\"active\"})", "legendFormat": "active" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Terminal outcomes /s by status",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(payroll_events_terminal_total[5m])) by (status)", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Processing attempts /s by error class",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(payroll_processing_attempts_total[5m])) by (error_type)", "legendFormat": "{{error_type}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP requests /s by status class",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(payroll_http_requests_total[5m])) by (status_class)", "legendFormat": "{{status_class}}" }
+      ]
+    }
+  ]
+}

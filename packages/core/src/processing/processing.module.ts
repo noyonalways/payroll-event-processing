@@ -8,6 +8,9 @@ import { BankAccountChangeHandler } from './handlers/bank-account-change.handler
 import { AddressChangeHandler } from './handlers/address-change.handler';
 import { SalaryChangeHandler } from './handlers/salary-change.handler';
 import { DepartmentChangeHandler } from './handlers/department-change.handler';
+import { WebhooksModule } from '../webhooks/webhooks.module';
+import { ProviderHttpClient } from './provider-http.client';
+import { ProviderResolverService } from './provider-resolver.service';
 
 /**
  * Processing strategies + simulated provider, shared by the worker and (when
@@ -15,6 +18,7 @@ import { DepartmentChangeHandler } from './handlers/department-change.handler';
  * `FailureConfig` factory can inject `ConfigService` here without importing it.
  */
 @Module({
+  imports: [WebhooksModule],
   providers: [
     {
       provide: FailureConfig,
@@ -22,6 +26,8 @@ import { DepartmentChangeHandler } from './handlers/department-change.handler';
       inject: [ConfigService],
     },
     SimulatedPayrollProvider,
+    ProviderHttpClient,
+    ProviderResolverService,
     HandlerRegistry,
     EventClaim,
     EmployeeDomainStateWriter,
@@ -30,6 +36,6 @@ import { DepartmentChangeHandler } from './handlers/department-change.handler';
     SalaryChangeHandler,
     DepartmentChangeHandler,
   ],
-  exports: [HandlerRegistry, EventClaim, SimulatedPayrollProvider, FailureConfig],
+  exports: [HandlerRegistry, EventClaim, SimulatedPayrollProvider, FailureConfig, ProviderResolverService],
 })
 export class ProcessingModule {}

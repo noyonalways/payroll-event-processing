@@ -4,62 +4,78 @@ context: |
   # Payroll Event Processing Service
 
   ## Tech Stack
-  - Runtime: Node.js 20 LTS
+  - Runtime: Node.js 20 LTS (apps run under the pnpm + Turborepo workspace)
   - Language: TypeScript (strict mode)
-  - Framework: NestJS 11 (latest stable, v11.2.x — native Express v5 support, built-in JSON logging)
+  - Framework: NestJS 11 (v11.2.x — Express v5, built-in JSON logging)
   - Database: PostgreSQL 16 via Prisma ORM
   - Queue: Redis 7 + BullMQ
+  - Frontend: React 19 + Vite (demo UI in apps/web)
   - Containerisation: Docker + Docker Compose
-  - CI: GitHub Actions
-  - Frontend: React + Vite (minimal demo UI)
-  - Testing: Jest + Supertest + @nestjs/testing (unit → @nestjs/testing mocks; integration → real DB/Redis in Docker; e2e → Supertest full HTTP)
-  - API Documentation: Swagger / OpenAPI via @nestjs/swagger (Swagger UI at GET /api-docs; JSON spec at GET /api-docs-json)
-  - Package manager: npm workspaces (monorepo-lite)
-  - Linter: ESLint + Prettier
+  - CI: GitHub Actions (pnpm + turbo task pipelines)
+
+  ## Workspace layout (pnpm + Turborepo — turborepo-workspace change)
+  - apps/api       — HTTP entrypoint (NestJS AppModule from @repo/core) + all e2e suites
+  - apps/worker    — standalone BullMQ consumer + heartbeat/relay/sweep background jobs
+  - apps/web       — React + Vite demo UI
+  - packages/core  — business logic + BOTH composition roots (AppModule, WorkerModule):
+      src/auth        — JWT sessions, tenancy guard, RBAC roles, password reset, lockout
+      src/events      — events controller/service, recovery actions, SSE lifecycle stream
+      src/employees   — org-scoped employee directory CRUD
+      src/members     — org membership management + invitations
+      src/processing  — handler registry, provider resolver (simulated default /
+                        HTTP adapter), transactional claim, domain-state writer
+      src/queue       — BullMQ producer (per-employee FIFO, tenant-qualified jobIds)
+      src/telemetry   — Prometheus metrics, OpenTelemetry tracing, Sentry (env-gated)
+      src/webhooks    — signed webhook delivery (transactional outbox + relay)
+      src/common      — health, idempotency layer, error filter, swagger
+  - packages/database — Prisma schema/migrations, PrismaService, Redis/BullMQ connections, pub/sub
+  - packages/shared   — framework-agnostic vocabulary (event types, errors, contracts)
+  - packages/eslint-config / typescript-config — shared tooling configs
 
   ## Domain
-  An asynchronous payroll event processing service. Employees submit payroll changes
-  (BANK_ACCOUNT_CHANGE, ADDRESS_CHANGE, SALARY_CHANGE). Events are persisted
-  immediately and enqueued for background processing by a BullMQ worker. The HTTP
-  request is never blocked by slow processing.
-
-  ## Folder structure
-  - src/                  — NestJS API (shared with worker)
-    - events/             — Controller, DTOs, service, validation
-    - processing/         — Handler strategy registry, per-type processors
-    - queue/              — BullMQ module, producer, consumer, FIFO config
-    - common/             — Global pipes, filters, idempotency guard, logger
-    - prisma/             — PrismaService, PrismaModule
-  - apps/worker/          — Standalone BullMQ worker entrypoint
-  - prisma/               — Schema + migrations
-  - frontend/             — Vite + React minimal demo
-  - docker/               — Dockerfiles
-  - test/                 — e2e / integration tests
-  - .github/workflows/    — CI pipeline
-
-  ## Key Reliability Requirements
-  1. Temporary vs permanent failure — transient errors retry (exponential backoff);
-     business/validation errors are permanent failures (no retry).
-  2. Idempotency — Idempotency-Key header + DB unique constraint prevent duplicate effects.
-  3. Concurrency safety — per-employee FIFO via BullMQ job naming; DB row locking
-     (SELECT … FOR UPDATE) to prevent concurrent processing of same employee.
-  4. Worker crash recovery — events transition to `processing` before work starts;
-     BullMQ stalled-job detection re-queues stuck jobs.
-  5. Exactly-once processing — success write is transactional and guarded by status check
-     so crash-then-reprocess never applies a change twice.
-  6. Per-employee ordering — stable `sequence` column; FIFO queue group by employeeId;
-     parallel across different employees.
-  7. Extensibility — handler strategy registry makes new event types a drop-in addition.
+  An asynchronous payroll event processing service. Users authenticate to an
+  ORGANIZATION (multi-tenant): every payroll event, employee, membership, and
+  integration row carries organization_id, and the tenant boundary comes from
+  the signed access token. Employees submit payroll changes (BANK_ACCOUNT_CHANGE,
+  ADDRESS_CHANGE, SALARY_CHANGE, DEPARTMENT_CHANGE). Events persist immediately,
+  enqueue for background processing (BullMQ), and handlers dispatch the external
+  operation to the organization's RESOLVED provider (simulated default, HTTP
+  adapter when configured), then commit effective-dated employee domain state
+  inside the claim transaction.
 
   ## Event Lifecycle States
-  received → queued → processing → success | failed
+  received → queued → processing → success | failed, with CANCELLED reachable
+  only from pending states via a manual recovery action (or driven back to
+  queued by a retry). Terminal commits carry the attempt audit row, domain
+  state (success only), and webhook delivery intents in the same transaction.
+
+  ## Key Reliability Requirements
+  1. Temporary vs permanent failure — transient errors retry (exponential
+     backoff); business rejections are permanent and never retried. Providers
+     (simulated AND http adapters) raise the same two error classes.
+  2. Idempotency — required Idempotency-Key header + DB unique constraint.
+  3. Concurrency safety — per-employee FIFO (tenant-qualified jobIds), DB row
+     locking (SELECT ... FOR UPDATE) for the claim, SKIP LOCKED for the webhook
+     relay.
+  4. Worker crash recovery — BullMQ stalled-job detection + transactional
+     rollback claims; worker heartbeats feed /health liveness.
+  5. Exactly-once processing — terminal write + attempt row + domain state +
+     webhook intents commit atomically, guarded by status checks.
+  6. Push surfaces — SSE lifecycle stream (realtime-status) and signed webhooks
+     (integrator-webhooks) announce committed transitions; both best-effort on
+     the outside of the transaction.
+  7. Extensibility — handler strategy registry per event type, provider per
+     organization, roles OWNER/ADMIN/MEMBER enforced by a global guard.
 
   ## Conventions
   - Conventional commits (feat:, fix:, chore:, test:, docs:)
   - camelCase for TypeScript, snake_case for DB columns
   - All DTOs use class-validator decorators
   - All errors logged with context (eventId, employeeId, eventType, attempt)
-  - No authentication required (out of scope)
+  - Authentication is REQUIRED except @Public() routes (register, login,
+    refresh, logout, reset flows, /health, /metrics, invitation acceptance);
+    tenant isolation makes cross-org reads 404, role gates make them 403 first
+    for under-privileged callers.
 
 rules:
   proposal:
