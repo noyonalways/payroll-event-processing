@@ -1,16 +1,13 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App';
-import { API_BASE_URL, SessionExpiredError } from './api/client';
-import { fetchEventStatus } from './api/events';
+import { API_BASE_URL } from './api/client';
 import { clearSession, getSession, setSession } from './lib/session';
-import type { EventListItem, SessionResponse } from './lib/types';
+import type { Employee, EventListItem, SessionResponse } from './lib/types';
 
-function sessionResponse(
-  overrides: Partial<SessionResponse> = {},
-): SessionResponse {
+function sessionResponse(overrides: Partial<SessionResponse> = {}): SessionResponse {
   return {
     user: { id: 'u-1', email: 'owner@acme.example', name: 'Ada Lovelace' },
     organization: { id: 'org-1', name: 'Acme Payroll', slug: 'acme-payroll' },
@@ -35,16 +32,16 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function listPage(data: EventListItem[] = []): {
   data: EventListItem[];
-  nextCursor: string | null;
+  nextCursor: null;
   limit: number;
 } {
-  return { data, nextCursor: null, limit: 20 };
+  return { data, nextCursor: null, limit: 100 };
 }
 
 function listRow(id: string, overrides: Partial<EventListItem> = {}): EventListItem {
   return {
     eventType: 'SALARY_CHANGE',
-    employeeId: 'emp-7',
+    employeeId: 'EMP-001',
     sequence: 4,
     status: 'success',
     createdAt: '2026-08-26T00:00:00.000Z',
@@ -54,6 +51,17 @@ function listRow(id: string, overrides: Partial<EventListItem> = {}): EventListI
     ...overrides,
   };
 }
+
+const employee = (overrides: Partial<Employee> = {}): Employee => ({
+  id: 'emp-row-1',
+  employeeNumber: 'EMP-001',
+  name: 'Jane Doe',
+  department: 'Engineering',
+  active: true,
+  createdAt: '2026-08-01T00:00:00.000Z',
+  updatedAt: '2026-08-01T00:00:00.000Z',
+  ...overrides,
+});
 
 const fetchMock = vi.fn();
 
@@ -68,37 +76,46 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The dashboard home fetches events + employees. */
+function mockDashboardHome(
+  events: EventListItem[] = [],
+  employees: Employee[] = [],
+): void {
+  fetchMock.mockImplementation((url: RequestInfo | URL) => {
+    const u = String(url);
+    if (u.includes('/employees')) {
+      return Promise.resolve(
+        jsonResponse({ data: employees, nextCursor: null, limit: 100 }),
+      );
+    }
+    if (u.includes('/events')) {
+      return Promise.resolve(jsonResponse(listPage(events)));
+    }
+    return Promise.resolve(jsonResponse(listPage()));
+  });
+}
+
 describe('App session gate', () => {
   it('shows the sign-in view when there is no session', () => {
     render(<App />);
 
     expect(screen.getByTestId('auth-submit')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('heading', { name: /submit an event/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('heading', { name: /event history/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-view')).not.toBeInTheDocument();
   });
 
-  it('shows the event workspace and the acting organization with a session', () => {
+  it('with a session, shows the dashboard acting in the organization', async () => {
     setSession(sessionResponse());
-    fetchMock.mockResolvedValue(jsonResponse(listPage()));
+    mockDashboardHome([listRow('e-1')], [employee()]);
 
     render(<App />);
 
-    expect(
-      screen.getByRole('heading', { name: /submit an event/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: /event history/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByTestId('dashboard-view')).toBeInTheDocument();
     expect(screen.getByText(/acting in/i)).toBeInTheDocument();
     expect(screen.getByText('Acme Payroll')).toBeInTheDocument();
-    expect(screen.getByText('owner@acme.example')).toBeInTheDocument();
+    expect(screen.getByTestId('header-user-email').textContent).toContain('owner@acme.example');
   });
 
-  it('returns to sign-in when the refresh is rejected mid-session', async () => {
+  it('returns to sign-in when every authenticated call is rejected and cannot refresh', async () => {
     setSession(sessionResponse());
     fetchMock.mockResolvedValue(
       new Response(
@@ -107,46 +124,28 @@ describe('App session gate', () => {
           message: 'Unauthorized',
           error: 'UnauthorizedException',
           timestamp: '2026-08-26T00:00:00.000Z',
-          path: '/events/e-1',
+          path: '/events',
         }),
         { status: 401, headers: { 'Content-Type': 'application/json' } },
       ),
     );
 
     render(<App />);
-    expect(
-      screen.getByRole('heading', { name: /submit an event/i }),
-    ).toBeInTheDocument();
-
-    // Any in-flight authenticated request (here: a status poll) that cannot be
-    // refreshed forces the sign-out.
-    await act(async () => {
-      await expect(fetchEventStatus('e-1')).rejects.toBeInstanceOf(
-        SessionExpiredError,
-      );
-    });
-
-    expect(screen.getByTestId('auth-submit')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('heading', { name: /submit an event/i }),
-    ).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('auth-submit')).toBeInTheDocument());
+    expect(getSession()).toBeNull();
   });
 
   it('sign-out revokes the token, clears the session, and returns to sign-in', async () => {
-    setSession(sessionResponse());
-    fetchMock.mockImplementation((url: RequestInfo | URL) =>
-      String(url) === `${API_BASE_URL}/events`
-        ? Promise.resolve(jsonResponse(listPage()))
-        : Promise.resolve(new Response(null, { status: 204 })),
-    );
     const user = userEvent.setup();
+    setSession(sessionResponse());
+    mockDashboardHome();
 
     render(<App />);
+    await screen.findByTestId('dashboard-view');
+
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     await waitFor(() => expect(getSession()).toBeNull());
-    // The history is server-owned: clearing local state leaves only the
-    // session key behind (and that one is gone after sign-out).
     expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
     expect(screen.getByTestId('auth-submit')).toBeInTheDocument();
 
@@ -154,92 +153,196 @@ describe('App session gate', () => {
       String(url).endsWith('/auth/logout'),
     );
     expect(logoutCall).toBeDefined();
-    const [url, init] = logoutCall as [string, RequestInit];
+    const [url, init] = logoutCall as unknown as [string, RequestInit];
     expect(url).toBe(`${API_BASE_URL}/auth/logout`);
-    expect(JSON.parse(init.body as string)).toEqual({
-      refreshToken: 'refresh-1',
-    });
+    expect(JSON.parse(init.body as string)).toEqual({ refreshToken: 'refresh-1' });
   });
 });
 
-describe('App event history (server-driven)', () => {
-  it('loads the organization history through the authenticated client on first render', async () => {
+describe('App workspace (new IA)', () => {
+  it('the dashboard renders stats, needs-attention retries, and latest activity from the server', async () => {
+    const user = userEvent.setup();
     setSession(sessionResponse());
-    // The workspace route: events list for the history, a directory page for
-    // the submit form's employee picker (actor-directory backed).
-    fetchMock.mockImplementation((url: RequestInfo | URL) =>
-      String(url).includes('/employees')
-        ? Promise.resolve(
-            jsonResponse({
-              data: [],
-              nextCursor: null,
-              limit: 100,
-            }),
-          )
-        : Promise.resolve(jsonResponse(listPage([listRow('e-history-1')]))),
-    );
+    const failed = listRow('e-failed-1', {
+      id: 'e-failed-1',
+      status: 'failed',
+      eventType: 'SALARY_CHANGE',
+    });
+    mockDashboardHome([failed, listRow('e-ok-1')], [employee()]);
 
     render(<App />);
+    await screen.findByTestId('dashboard-view');
 
-    // History FROM the server: a row the user never submitted in this session.
-    // (event-type select options also carry the type name, so key off fields
-    // unique to the list row.)
-    expect(await screen.findByText('e-history-1')).toBeInTheDocument();
-    expect(screen.getByText('emp-7')).toBeInTheDocument();
-    expect(screen.getByText('seq 4')).toBeInTheDocument();
+    expect(screen.getByTestId('stat-applied')).toHaveTextContent('1');
+    expect(screen.getByTestId('stat-failed')).toHaveTextContent('1');
+    expect(await screen.findByTestId('dashboard-failed-e-failed-1')).toBeInTheDocument();
 
-    const historyCall = fetchMock.mock.calls.find(
-      ([url]) => String(url) === `${API_BASE_URL}/events`,
-    );
-    expect(historyCall).toBeDefined();
-    const [, init] = historyCall as [string, RequestInit];
-    expect((init.headers as Record<string, string>).Authorization).toBe(
-      'Bearer access-1',
-    );
-    // No client-side list persistence — the session key is the only residue.
-    expect(localStorage.getItem('payroll.events.tracked.v1')).toBeNull();
-  });
-
-  it('showing history for a NEW organization after a session switch requires no cleanup', async () => {
-    setSession(sessionResponse());
-    fetchMock.mockImplementation((url: RequestInfo | URL) =>
-      String(url) === `${API_BASE_URL}/events`
-        ? Promise.resolve(jsonResponse(listPage()))
-        : Promise.resolve(new Response(null, { status: 204 })),
-    );
-    const user = userEvent.setup();
-
-    const { unmount } = render(<App />);
+    await user.click(screen.getByTestId('dashboard-retry-e-failed-1'));
     await waitFor(() =>
       expect(
-        fetchMock.mock.calls.some(([url]) => String(url) === `${API_BASE_URL}/events`),
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === `${API_BASE_URL}/events/e-failed-1/retry`,
+        ),
       ).toBe(true),
     );
-    await user.click(screen.getByRole('button', { name: 'Sign out' }));
-    await waitFor(() => expect(screen.getByTestId('auth-submit')).toBeInTheDocument());
-    unmount();
+  });
 
-    // A different organization signs in; its workspace is a fresh mount that
-    // simply re-fetches page one with ITS session token — the previous view
-    // was never stored anywhere.
-    const otherSession = sessionResponse({
-      accessToken: 'access-2',
-      refreshToken: 'refresh-2',
-      user: { id: 'u-2', email: 'owner@globex.example', name: 'Grace Hopper' },
-      organization: { id: 'org-2', name: 'Globex Payroll', slug: 'globex-payroll' },
-    });
-    setSession(otherSession);
+  it('the change-requests view shows human rows and drives retry', async () => {
+    const user = userEvent.setup();
+    setSession(sessionResponse());
+    mockDashboardHome(
+      [
+        listRow('e-1', { status: 'failed', eventType: 'BANK_ACCOUNT_CHANGE' }),
+        listRow('e-2', { status: 'success' }),
+      ],
+      [employee()],
+    );
+
     render(<App />);
+    await screen.findByTestId('dashboard-view');
 
-    await waitFor(() => {
-      const historyCalls = fetchMock.mock.calls.filter(
-        ([url]) => String(url) === `${API_BASE_URL}/events`,
-      );
-      expect(historyCalls.length).toBeGreaterThanOrEqual(2);
-      const [, init] = historyCalls.at(-1) as [string, RequestInit];
-      expect((init.headers as Record<string, string>).Authorization).toBe(
-        'Bearer access-2',
-      );
+    await user.click(screen.getByTestId('view-requests'));
+
+    expect(await screen.findByTestId('requests-view')).toBeInTheDocument();
+    expect(screen.getAllByText('Jane Doe').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Bank account change').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('requests-filter-failed')).toBeInTheDocument();
+
+    const retryBtn = await screen.findByTestId('request-retry-e-1');
+    await user.click(retryBtn);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url).endsWith('/events/e-1/retry'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('opens the wizard from the dashboard and submits a typed request', async () => {
+    const user = userEvent.setup();
+    setSession(sessionResponse());
+    let postCall: { url: string; body: { eventType: string; payload: Record<string, unknown> } } | null = null;
+    fetchMock.mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u === `${API_BASE_URL}/events` && init?.method === 'POST') {
+        postCall = {
+          url: u,
+          body: JSON.parse((init as RequestInit).body as string),
+        };
+        return Promise.resolve(jsonResponse({ id: 'e-new', status: 'received' }, 201));
+      }
+      if (u.includes('/employees')) {
+        return Promise.resolve(
+          jsonResponse({ data: [employee()], nextCursor: null, limit: 100 }),
+        );
+      }
+      if (u.includes('/events')) {
+        return Promise.resolve(jsonResponse(listPage()));
+      }
+      return Promise.resolve(jsonResponse({}));
     });
+
+    render(<App />);
+    await screen.findByTestId('dashboard-view');
+    await user.click(screen.getByTestId('dashboard-request-change'));
+
+    await waitFor(() => expect(screen.getByTestId('wizard-search')).toBeInTheDocument());
+    await user.click(screen.getByTestId('wizard-person-EMP-001'));
+    await user.click(screen.getByTestId('wizard-next'));
+
+    await user.click(screen.getByTestId('wizard-kind-SALARY_CHANGE'));
+    await user.click(screen.getByTestId('wizard-next'));
+
+    await user.type(screen.getByTestId('wizard-field-newSalary'), '75000');
+    await user.type(screen.getByTestId('wizard-field-currency'), 'EUR');
+    await user.type(screen.getByTestId('wizard-effective-date'), '2026-11-01');
+    await user.click(screen.getByTestId('wizard-details-next'));
+
+    expect(screen.getByTestId('wizard-review').textContent).toContain('Jane Doe');
+    expect(screen.getByTestId('wizard-review').textContent).toContain('75,000');
+    await user.click(screen.getByTestId('wizard-submit'));
+
+    await waitFor(() => expect(postCall).toBeTruthy());
+    expect(postCall!.body.eventType).toBe('SALARY_CHANGE');
+    expect(postCall!.body.payload).toMatchObject({
+      employeeId: 'EMP-001',
+      newSalary: '75000',
+      currency: 'EUR',
+      effectiveDate: '2026-11-01',
+    });
+  });
+
+  it('the People view shows the roster, applied state, and prefill hand-off', async () => {
+    const user = userEvent.setup();
+    setSession(sessionResponse());
+    fetchMock.mockImplementation((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('/employees')) {
+        return Promise.resolve(
+          jsonResponse({ data: [employee()], nextCursor: null, limit: 100 }),
+        );
+      }
+      if (u.match(/\/events\/[^/?]+$/)) {
+        return Promise.resolve(
+          jsonResponse({
+            id: 'e-1',
+            eventType: 'SALARY_CHANGE',
+            employeeId: 'EMP-001',
+            sequence: 1,
+            status: 'success',
+            payload: {
+              employeeId: 'EMP-001',
+              effectiveDate: '2026-09-01',
+              newSalary: 75000,
+              currency: 'EUR',
+            },
+            createdAt: '2026-08-26T00:00:00.000Z',
+            updatedAt: '2026-08-26T00:00:01.000Z',
+            processedAt: '2026-08-26T00:00:01.000Z',
+            result: {
+              reference: 'SIM-1',
+              acknowledged: { newSalary: 75000, currency: 'EUR', effectiveDate: '2026-09-01' },
+            },
+            attempts: [],
+          }),
+        );
+      }
+      if (u.includes('/events')) {
+        return Promise.resolve(
+          jsonResponse(listPage([listRow('e-1', { employeeId: 'EMP-001', status: 'success' })])),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(<App />);
+    await screen.findByTestId('dashboard-view');
+    await user.click(screen.getByTestId('view-people'));
+
+    expect(await screen.findByTestId('people-row-EMP-001')).toBeInTheDocument();
+    await user.click(screen.getByTestId('people-row-EMP-001'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('person-current').textContent).toContain('75,000'),
+    );
+
+    await user.click(screen.getByTestId('person-request-change'));
+    expect(screen.getByTestId('request-change-view')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-person-EMP-001').textContent).toContain('Jane Doe'),
+    );
+  });
+
+  it('the Provider tab is hidden for non-OWNER members', async () => {
+    setSession(sessionResponse({ role: 'MEMBER' }));
+    mockDashboardHome();
+
+    render(<App />);
+    await screen.findByTestId('dashboard-view');
+
+    expect(screen.queryByTestId('view-provider')).not.toBeInTheDocument();
+    expect(screen.getByTestId('view-members')).toBeInTheDocument();
+    expect(screen.getByTestId('view-webhooks')).toBeInTheDocument();
   });
 });

@@ -3,65 +3,44 @@ import { useState } from 'react';
 import { logout } from './api/auth';
 import { AuthView } from './components/AuthView';
 import { Button } from './components/ui/button';
-import { DeadLetterView } from './components/DeadLetterView';
-import { EmployeesView } from './components/EmployeesView';
-import { EventDetail } from './components/EventDetail';
-import { EventFilters } from './components/EventFilters';
-import { EventList } from './components/EventList';
-import { SubmitForm } from './components/SubmitForm';
+import { MembersView } from './components/MembersView';
+import { AcceptInviteView, invitationTokenFromLocation } from './components/AcceptInviteView';
+import { ResetPasswordView, resetTokenFromLocation } from './components/ResetPasswordView';
+import { WebhooksView } from './components/WebhooksView';
+import { ProviderConfigView } from './components/ProviderConfigView';
+import { DashboardView } from './components/DashboardView';
+import { RequestChangeView } from './components/RequestChangeView';
+import { RequestsView } from './components/RequestsView';
+import { PeopleView } from './components/PeopleView';
+import { useEventStream } from './lib/useEventStream';
 import { clearSession, setSession } from './lib/session';
 import type { StoredSession } from './lib/session';
-import { useEventHistory } from './lib/useEventHistory';
-import { useRecovery } from './lib/useRecovery';
 import { useSession } from './lib/useSession';
 
 /**
- * Session gate: without a session the app shows the sign-in / registration
- * view; with one it shows the authenticated event workspace. The client layer
- * clears the session when a refresh is rejected, so a forced sign-out lands
- * back on the sign-in view through the same subscription.
- */
-function App() {
-  const session = useSession();
-  if (!session) {
-    return <AuthView onAuthenticated={setSession} />;
-  }
-  return <PayrollWorkspace session={session} />;
-}
-
-/**
- * Two-pane demo UI over the organization's history: submit typed payroll
- * events and browse the SERVER-driven event history (`GET /events`) with
- * combinable filters and load-more paging. Status updates arrive over the
- * event-status-stream — badges and attempt counts move as transitions commit;
- * while the stream is down the rows fall back to `GET /events/{id}` polling
- * (see useEventHistory). The detail panel shows the processing result and the
- * failure trail. There is no client-side list persistence — every view is what
- * the server holds for the signed-in organization, so sign-out leaves nothing
- * behind and reloads simply re-fetch. Requests go through the authenticated
- * client, so the header names the organization the session is acting in.
- *
- * The recovery actions (event-recovery) live on the history rows — retry on
- * `failed`, cancel on pending — and a dedicated dead-letter view (a failed-only
- * selection of the same history contract) collects what needs attention.
+ * The authenticated workspace, organized around the real user journey
+ * (frontend-app rework): a Dashboard that answers "what needs my attention",
+ * a plain-language change-request wizard, the full request register, and a
+ * People view showing each person's current pay details. Integration admin
+ * (members / webhooks / provider) sits in a Settings group. Live lifecycle
+ * updates still arrive over the event-status-stream, with the same
+ * server-owned, nothing-local data rules as before: sign-out leaves nothing
+ * behind and reloads simply re-fetch.
  */
 function PayrollWorkspace({ session }: { session: StoredSession }) {
-  const history = useEventHistory();
-  const [view, setView] = useState<'history' | 'dead-letter' | 'employees'>(
-    'history',
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Derive the selection; when the selected row leaves the current view
-  // (filters changed, page re-fetched), the detail panel falls back to the
-  // placeholder.
-  const selected =
-    history.rows.find((row) => row.id === selectedId) ?? null;
-  const recovery = useRecovery({ onSettled: () => history.refresh() });
+  // The SSE lifecycle stream stays connected for the workspace indicator;
+  // the new views re-fetch server-side data on their own cadence/callbacks.
+  const stream = useEventStream({ enabled: true });
+  const [view, setView] = useState<
+    'dashboard' | 'request' | 'requests' | 'people' | 'members' | 'webhooks' | 'provider'
+  >('dashboard');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [wizardPrefill, setWizardPrefill] = useState<string | null>(null);
 
   function handleSignOut() {
     // Revoke the refresh token server-side (logout is idempotent, always 204)
-    // and drop the session. The history itself is server-owned, so nothing
-    // else needs clearing — the next session fetches ITS organization only.
+    // and drop the session. The data itself is server-owned, so nothing else
+    // needs clearing — the next session fetches ITS organization only.
     const { refreshToken } = session;
     clearSession();
     void logout(refreshToken).catch(() => {
@@ -78,189 +57,177 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
               Payroll Events
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Submit typed payroll events and browse the organization's
-              processing history as it moves through the pipeline in real time.
+              Request payroll changes for your people and watch every step —
+              submission, processing, and the applied result — in real time.
             </p>
           </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
-                acting in{' '}
-                <span className="font-semibold text-foreground">
-                  {session.organization.name}
-                </span>{' '}
-                · {session.role}
-              </span>
-              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${history.streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                  aria-hidden
-                />
-                {history.streamConnected ? 'live' : 'polling fallback'} ·{' '}
-                {history.rows.length} shown
-              </span>
-              <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
-                Sign out
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground" title={session.user.id}>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span
+              className="text-xs text-muted-foreground"
+              title={session.user.id}
+              data-testid="header-user-email"
+            >
               Signed in as{' '}
-              <span className="font-medium text-foreground">
-                {session.user.email}
-              </span>
-            </p>
+              <span className="font-medium text-foreground">{session.user.email}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
+              acting in{' '}
+              <span className="font-semibold text-foreground">
+                {session.organization.name}
+              </span>{' '}
+              · {session.role}
+            </span>
+            <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${stream.streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                aria-hidden
+              />
+              {stream.streamConnected ? 'live' : 'reconnecting…'}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
+              Sign out
+            </Button>
           </div>
         </header>
 
         <div
           role="tablist"
           aria-label="Views"
-          className="mb-5 flex gap-2"
+          className="mb-5 flex flex-wrap items-center gap-2"
           data-testid="view-switch"
         >
           <Button
             type="button"
-            variant={view === 'history' ? 'default' : 'outline'}
+            variant={view === 'dashboard' ? 'default' : 'outline'}
             size="sm"
             role="tab"
-            aria-selected={view === 'history'}
-            onClick={() => setView('history')}
-            data-testid="view-history"
+            aria-selected={view === 'dashboard'}
+            onClick={() => setView('dashboard')}
+            data-testid="view-dashboard"
           >
-            Submit & history
+            Dashboard
           </Button>
           <Button
             type="button"
-            variant={view === 'dead-letter' ? 'default' : 'outline'}
+            variant={view === 'requests' ? 'default' : 'outline'}
             size="sm"
             role="tab"
-            aria-selected={view === 'dead-letter'}
-            onClick={() => setView('dead-letter')}
-            data-testid="view-dead-letter"
+            aria-selected={view === 'requests'}
+            onClick={() => setView('requests')}
+            data-testid="view-requests"
           >
-            Dead letters
+            Change requests
           </Button>
           <Button
             type="button"
-            variant={view === 'employees' ? 'default' : 'outline'}
+            variant={view === 'people' ? 'default' : 'outline'}
             size="sm"
             role="tab"
-            aria-selected={view === 'employees'}
-            onClick={() => setView('employees')}
-            data-testid="view-employees"
+            aria-selected={view === 'people'}
+            onClick={() => setView('people')}
+            data-testid="view-people"
           >
-            Employees
+            People
           </Button>
+          <span className="mx-2 h-6 w-px bg-border" aria-hidden data-testid="settings-divider" />
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">
+            Settings
+          </span>
+          <Button
+            type="button"
+            variant={view === 'members' ? 'default' : 'outline'}
+            size="sm"
+            role="tab"
+            aria-selected={view === 'members'}
+            onClick={() => setView('members')}
+            data-testid="view-members"
+          >
+            Members
+          </Button>
+          <Button
+            type="button"
+            variant={view === 'webhooks' ? 'default' : 'outline'}
+            size="sm"
+            role="tab"
+            aria-selected={view === 'webhooks'}
+            onClick={() => setView('webhooks')}
+            data-testid="view-webhooks"
+          >
+            Webhooks
+          </Button>
+          {session.role === 'OWNER' && (
+            <Button
+              type="button"
+              variant={view === 'provider' ? 'default' : 'outline'}
+              size="sm"
+              role="tab"
+              aria-selected={view === 'provider'}
+              onClick={() => setView('provider')}
+              data-testid="view-provider"
+            >
+              Provider
+            </Button>
+          )}
         </div>
 
-        {view === 'dead-letter' ? (
-          <DeadLetterView />
-        ) : view === 'employees' ? (
+        {view === 'dashboard' ? (
+          <DashboardView
+            refreshKey={refreshKey}
+            onRequestChange={() => setView('request')}
+            onOpenRequests={() => setView('requests')}
+            onChanged={() => setRefreshKey((k) => k + 1)}
+          />
+        ) : view === 'request' ? (
+          <RequestChangeView
+            prefillEmployeeNumber={wizardPrefill}
+            onSubmitted={() => {
+              setRefreshKey((k) => k + 1);
+              setWizardPrefill(null);
+              setView('requests');
+            }}
+          />
+        ) : view === 'requests' ? (
+          <RequestsView refreshKey={refreshKey} />
+        ) : view === 'people' ? (
+          <PeopleView
+            refreshKey={refreshKey}
+            onRequestChange={(employeeNumber) => {
+              setWizardPrefill(employeeNumber);
+              setView('request');
+            }}
+          />
+        ) : view === 'members' ? (
           <div className="mx-auto max-w-4xl">
-            <EmployeesView />
+            <MembersView />
+          </div>
+        ) : view === 'webhooks' ? (
+          <div className="mx-auto max-w-5xl">
+            <WebhooksView />
           </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-2">
-            <section className="space-y-6">
-              <SubmitForm onSubmitted={() => void history.refresh()} />
-
-              <EventFilters
-                filters={history.filters}
-                onChange={history.setFilter}
-                onClear={history.clearFilters}
-              />
-
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold tracking-tight">
-                    Event history
-                  </h2>
-                </div>
-                {recovery.error && (
-                  <div
-                    className="mb-2 flex items-start justify-between gap-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                    role="alert"
-                    data-testid="history-action-error"
-                  >
-                    <span>
-                      {recovery.error.action === 'retry' ? 'Retry' : 'Cancel'}{' '}
-                      failed: {recovery.error.message}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={recovery.clearError}
-                    >
-                      dismiss
-                    </Button>
-                  </div>
-                )}
-                {history.loadError && (
-                  <p
-                    role="alert"
-                    className="mb-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                  >
-                    {history.loadError}
-                  </p>
-                )}
-                {history.loading ? (
-                  <p
-                    className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
-                    data-testid="event-history-loading"
-                  >
-                    Loading history…
-                  </p>
-                ) : (
-                  <EventList
-                    rows={history.rows}
-                    selectedId={selectedId}
-                    onSelect={setSelectedId}
-                    onRetry={recovery.retry}
-                    onCancel={recovery.cancel}
-                    pendingAction={recovery.pendingAction}
-                  />
-                )}
-                {history.hasMore && !history.loading && (
-                  <div className="mt-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => void history.loadMore()}
-                      disabled={history.loadingMore}
-                      data-testid="load-more"
-                    >
-                      {history.loadingMore ? 'Loading…' : 'Load more'}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-lg font-semibold tracking-tight">
-                Event detail
-              </h2>
-              {selected ? (
-                <EventDetail
-                  entry={selected}
-                  live={history.streamConnected}
-                />
-              ) : (
-                <p className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-                  Select an event to inspect its lifecycle, processing result, and
-                  failure trail.
-                </p>
-              )}
-            </section>
-          </div>
+          <ProviderConfigView />
         )}
       </div>
     </main>
   );
+}
+
+function App() {
+  // Hooks first (rules-of-hooks); the invite/reset branches render before ANY
+  // session gating — invitees and resetters have no session yet.
+  const session = useSession();
+  const inviteToken = invitationTokenFromLocation();
+  const resetToken = resetTokenFromLocation();
+  if (inviteToken) {
+    return <AcceptInviteView />;
+  }
+  if (resetToken) {
+    return <ResetPasswordView />;
+  }
+  if (!session) {
+    return <AuthView onAuthenticated={setSession} />;
+  }
+  return <PayrollWorkspace session={session} />;
 }
 
 export default App;

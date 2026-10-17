@@ -238,3 +238,132 @@ export interface SessionResponse extends ActorIdentity {
   expiresIn: string;
   refreshExpiresAt: string;
 }
+
+// ─── Membership management (org-membership-management) ──────────────────────
+
+/** One member of the signed-in organization (GET /members). */
+export interface Member {
+  userId: string;
+  email: string;
+  name: string | null;
+  role: MembershipRole;
+  joinedAt: string;
+}
+
+/** Create/update role values the API accepts for a membership role change. */
+export type MemberRole = MembershipRole;
+
+/** One invitation record (GET /invitations — accept tokens are never listed). */
+export interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REVOKED';
+  invitedBy: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  createdAt: string;
+}
+
+/** POST /invitations response — the ONLY place the one-time token appears. */
+export interface InvitationCreated extends Invitation {
+  acceptToken: string;
+  acceptUrl: string;
+}
+
+export interface CreateInvitationBody {
+  email: string;
+  role: 'ADMIN' | 'MEMBER';
+}
+
+export interface AcceptInvitationBody {
+  token: string;
+  password: string;
+}
+
+/** POST /invitations/accept result — everything the sign-in hand-off needs. */
+export interface AcceptInvitationResult {
+  organizationId: string;
+  organizationName: string;
+  role: string;
+  email: string;
+}
+
+// ─── Webhook management (integrator-webhooks UI) ─────────────────────────────
+
+/** One registered webhook endpoint (GET /webhook-endpoints — never the secret). */
+export interface WebhookEndpoint {
+  id: string;
+  label: string;
+  url: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** POST /webhook-endpoints response — the ONLY place the signing secret appears. */
+export interface WebhookEndpointCreated extends WebhookEndpoint {
+  signingSecret: string;
+}
+
+export interface CreateWebhookBody {
+  label: string;
+  url: string;
+}
+
+export interface UpdateWebhookBody {
+  label?: string;
+  url?: string;
+  active?: boolean;
+}
+
+/** One recorded delivery POST attempt (the trail integrators debug with). */
+export interface WebhookDeliveryAttempt {
+  id: string;
+  attemptNumber: number;
+  outcome: 'DELIVERED' | 'FAILED';
+  responseStatus: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+/** One webhook delivery: terminal notification + lifecycle state + trail. */
+export interface WebhookDelivery {
+  id: string;
+  webhookEndpointId: string | null;
+  url: string;
+  eventId: string;
+  terminalStatus: 'SUCCESS' | 'FAILED' | 'CANCELLED';
+  payload: Record<string, unknown>;
+  status: 'PENDING' | 'DELIVERED' | 'DEAD_LETTERED';
+  attempts: number;
+  nextAttemptAt: string | null;
+  deliveredAt: string | null;
+  deadLetterReason: string | null;
+  createdAt: string;
+  attemptTrail: WebhookDeliveryAttempt[];
+}
+
+// ─── Provider configuration (real-provider-adapter UI) ───────────────────────
+
+/** GET /provider-config — the credential is never returned by reads. */
+export interface ProviderConfig {
+  mode: 'SIMULATED' | 'HTTP';
+  baseUrl: string | null;
+}
+
+/** PUT /provider-config response — the credential appears EXACTLY once. */
+export interface ProviderConfigSaved extends ProviderConfig {
+  credential: string;
+}
+
+export interface UpsertProviderConfigBody {
+  mode: 'SIMULATED' | 'HTTP';
+  baseUrl?: string;
+  credential?: string;
+}
+
+/** POST /auth/forgot-password acknowledgement (token present = account exists). */
+export interface ForgotPasswordAcknowledgement {
+  token: string | null;
+}

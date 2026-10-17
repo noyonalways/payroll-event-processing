@@ -1,5 +1,5 @@
 import { API_BASE_URL, JSON_HEADERS, rawRequest } from './client';
-import type { SessionResponse } from '../lib/types';
+import type { ForgotPasswordAcknowledgement, SessionResponse } from '../lib/types';
 
 /**
  * The auth endpoints. All of them run on the plain transport on purpose: they
@@ -53,5 +53,31 @@ export function logout(refreshToken: string): Promise<void> {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ refreshToken }),
+  });
+}
+
+/**
+ * POST /auth/forgot-password — anti-enumeration by contract: the response is
+ * IDENTICAL whether or not the email has an account. `token` is non-null only
+ * when an account exists (this deployment's out-of-band hand-off); callers
+ * must never treat `null` as an error and must render both cases the same.
+ */
+export function forgotPassword(email: string): Promise<ForgotPasswordAcknowledgement> {
+  return rawRequest<ForgotPasswordAcknowledgement>(
+    `${API_BASE_URL}/auth/forgot-password`,
+    { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ email }) },
+  );
+}
+
+/**
+ * POST /auth/reset-password — completes the reset with the single-use token:
+ * new password + every live refresh token of the account revoked. 204 on
+ * success; one opaque 410 for unknown/expired/used tokens (never tell which).
+ */
+export function resetPassword(token: string, password: string): Promise<void> {
+  return rawRequest<void>(`${API_BASE_URL}/auth/reset-password`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ token, password }),
   });
 }
