@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import {
+  User,
+  Search,
+  DollarSign,
+  Building2,
+  MapPin,
+  CreditCard,
+  CheckCircle2,
+  ChevronRight,
+  ArrowLeft,
+  Loader2,
+  Calendar,
+} from 'lucide-react';
 
 import { fetchEmployeesPage } from '../api/employees';
 import { submitEvent } from '../api/events';
@@ -7,16 +20,8 @@ import { ApiError, NetworkError } from '../api/client';
 import { Button } from './ui/button';
 import { Input } from '@/components/motion/input';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/motion/select';
-import {
   changeTypeLabel,
   describeRequestedChange,
-  formatMoney,
 } from '../lib/humanize';
 import type { Employee, EventType } from '../lib/types';
 
@@ -29,37 +34,66 @@ const errorOf = (error: unknown): string =>
 
 type ChangeKind = Extract<EventType, 'SALARY_CHANGE' | 'BANK_ACCOUNT_CHANGE' | 'ADDRESS_CHANGE' | 'DEPARTMENT_CHANGE'>;
 
-/** The four changes a payroll person actually makes, in plain words. */
+/** The four change types in plain-language terms. */
 const CHANGE_KINDS: Array<{
   kind: ChangeKind;
   title: string;
   blurb: string;
-  emoji: string;
+  icon: React.ReactNode;
+  accentClass: string;
 }> = [
-  { kind: 'SALARY_CHANGE', title: 'Salary', blurb: 'Change what someone is paid', emoji: '💰' },
-  { kind: 'BANK_ACCOUNT_CHANGE', title: 'Bank account', blurb: 'Where their pay goes', emoji: '🏦' },
-  { kind: 'ADDRESS_CHANGE', title: 'Address', blurb: 'Where they live', emoji: '🏠' },
-  { kind: 'DEPARTMENT_CHANGE', title: 'Department', blurb: 'Where they sit in the org', emoji: '🧭' },
+  {
+    kind: 'SALARY_CHANGE',
+    title: 'Salary',
+    blurb: 'Update annual compensation',
+    icon: <DollarSign size={22} />,
+    accentClass: 'text-emerald-600 bg-emerald-500/12 border-emerald-500/25',
+  },
+  {
+    kind: 'BANK_ACCOUNT_CHANGE',
+    title: 'Bank account',
+    blurb: 'Change where pay is deposited',
+    icon: <CreditCard size={22} />,
+    accentClass: 'text-blue-600 bg-blue-500/12 border-blue-500/25',
+  },
+  {
+    kind: 'ADDRESS_CHANGE',
+    title: 'Address',
+    blurb: 'Update their residential address',
+    icon: <MapPin size={22} />,
+    accentClass: 'text-purple-600 bg-purple-500/12 border-purple-500/25',
+  },
+  {
+    kind: 'DEPARTMENT_CHANGE',
+    title: 'Department',
+    blurb: 'Move them within the organization',
+    icon: <Building2 size={22} />,
+    accentClass: 'text-amber-600 bg-amber-500/12 border-amber-500/25',
+  },
 ];
 
 const FIELD_LABELS: Record<string, { label: string; placeholder?: string }> = {
-  newSalary: { label: 'New salary (annual)' },
-  currency: { label: 'Currency', placeholder: 'EUR' },
-  iban: { label: 'New bank account (IBAN)', placeholder: 'DE89370400440532013000' },
-  street: { label: 'Street', placeholder: 'Main St 12' },
+  newSalary: { label: 'New annual salary', placeholder: '75000' },
+  currency: { label: 'Currency (ISO code)', placeholder: 'EUR' },
+  iban: { label: 'IBAN', placeholder: 'DE89370400440532013000' },
+  street: { label: 'Street address', placeholder: 'Main St 12' },
   city: { label: 'City', placeholder: 'Berlin' },
   postalCode: { label: 'Postal code', placeholder: '10115' },
-  country: { label: 'Country', placeholder: 'DE' },
+  country: { label: 'Country (ISO code)', placeholder: 'DE' },
   department: { label: 'New department', placeholder: 'Engineering' },
 };
 
-const STEP_TITLES = ['Who', 'What', 'Details', 'Review'] as const;
+const STEP_TITLES = ['Select person', 'Change type', 'Details', 'Review & submit'] as const;
+
+function getInitials(name: string | null | undefined, fallback: string): string {
+  if (!name) return fallback.slice(0, 2).toUpperCase();
+  return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+}
 
 /**
- * The change-request wizard (frontend-app rework, step 4 of the real-user
- * journey): pick a person, pick what to change, fill friendly details, review
- * in one sentence, submit. Simulation scenarios (the EMP-DEMO-* demo levers)
- * live behind a collapsed "Simulation" disclosure so real use is unaffected.
+ * The change-request wizard: pick a person, pick what to change, fill in
+ * the details, review in plain language, and submit. All business logic is
+ * API-driven — no simulation or demo overrides.
  */
 export function RequestChangeView({
   prefillEmployeeNumber,
@@ -77,7 +111,6 @@ export function RequestChangeView({
   const [search, setSearch] = useState('');
   const [kind, setKind] = useState<ChangeKind | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [simulation, setSimulation] = useState<'none' | string>('none');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
@@ -91,7 +124,9 @@ export function RequestChangeView({
         const active = page.data.filter((e) => e.active);
         setEmployees(active);
         const pre = active.find((e) => e.employeeNumber === prefillEmployeeNumber);
-        if (pre) setSelectedEmployee(pre);
+        if (pre) {
+          setSelectedEmployee(pre);
+        }
       })
       .catch((err) => !cancelled && setLoadError(errorOf(err)))
       .finally(() => !cancelled && setLoadingEmployees(false));
@@ -127,9 +162,11 @@ export function RequestChangeView({
   const canNext =
     (step === 0 && selectedEmployee !== null) ||
     (step === 1 && kind !== null) ||
-    (step === 2 && payload !== null && Object.entries(values)
-      .filter(([key]) => key !== 'effectiveDate')
-      .every(([, v]) => v.trim() !== '') &&
+    (step === 2 &&
+      payload !== null &&
+      Object.entries(values)
+        .filter(([key]) => key !== 'effectiveDate')
+        .every(([, v]) => v.trim() !== '') &&
       (values.effectiveDate ?? '') !== '');
 
   function handleDetail(event: FormEvent<HTMLFormElement>) {
@@ -141,26 +178,10 @@ export function RequestChangeView({
     if (!kind || !payload) return;
     setSubmitting(true);
     setSubmitError(null);
-    // Simulation levers submit for the reserved EMP-DEMO-* id, which forces
-    // the outcome server-side; real users never touch this disclosure.
-    const simulationId =
-      simulation === 'none'
-        ? null
-        : ({
-            success: 'EMP-DEMO-SUCCESS',
-            'retry-recover': 'EMP-DEMO-RECOVER',
-            'retry-fail': 'EMP-DEMO-TRANSIENT',
-            'fail-after-retries': 'EMP-DEMO-FAILAFTER',
-            permanent: 'EMP-DEMO-PERMANENT',
-            random: null,
-          }[simulation] ?? null);
     try {
       const result = await submitEvent({
         eventType: kind,
-        payload: {
-          ...payload,
-          employeeId: simulationId ?? payload.employeeId,
-        } as never,
+        payload: payload as never,
       });
       setSubmittedId(result.response.id);
       onSubmitted?.();
@@ -171,157 +192,236 @@ export function RequestChangeView({
     }
   }
 
+  // Success state
   if (submittedId) {
     return (
-      <section className="mx-auto max-w-xl space-y-4 text-center" data-testid="request-done">
-        <div className="text-4xl">✅</div>
-        <h2 className="text-xl font-semibold tracking-tight">Request submitted</h2>
-        <p className="text-sm text-muted-foreground">
-          The change is in the pipeline. You can watch it move through — and get
-          the outcome — on the change requests page.
-        </p>
-        <Button size="sm" onClick={() => onSubmitted?.()} data-testid="request-done-continue">
-          View my change requests
+      <section className="mx-auto max-w-lg space-y-6 py-12 text-center" data-testid="request-done">
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/15">
+          <CheckCircle2 size={40} className="text-emerald-600" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Request submitted</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The change is now in the processing pipeline. Head to Change Requests to
+            track its lifecycle from queued through to applied.
+          </p>
+        </div>
+        <Button
+          size="lg"
+          onClick={() => onSubmitted?.()}
+          data-testid="request-done-continue"
+          className="gap-2"
+        >
+          View change requests
+          <ChevronRight size={16} />
         </Button>
       </section>
     );
   }
 
+  const fieldsForKind =
+    kind === 'SALARY_CHANGE'
+      ? ['newSalary', 'currency', 'effectiveDate']
+      : kind === 'BANK_ACCOUNT_CHANGE'
+        ? ['iban', 'effectiveDate']
+        : kind === 'ADDRESS_CHANGE'
+          ? ['street', 'city', 'postalCode', 'country', 'effectiveDate']
+          : ['department', 'effectiveDate'];
+
   return (
-    <section className="mx-auto max-w-2xl space-y-5" data-testid="request-change-view">
+    <section className="mx-auto max-w-2xl space-y-8" data-testid="request-change-view">
+      {/* Page header */}
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Request a change</h2>
-        <p className="text-sm text-muted-foreground">
-          Tell us who changes what — we take it from there and track it end to end.
+        <h1 className="text-2xl font-bold tracking-tight">Request a change</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Tell us who changes what — we track it end to end.
         </p>
       </div>
 
-      {/* progress */}
+      {/* Step progress */}
       <div className="flex items-center gap-2" data-testid="wizard-progress">
         {STEP_TITLES.map((title, index) => (
           <div key={title} className="flex flex-1 items-center gap-2">
-            <span
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
-                index < step || (index === step)
+            <div
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold transition-all duration-200 ${
+                index < step
                   ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border bg-muted text-muted-foreground'
+                  : index === step
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border bg-background text-muted-foreground'
               }`}
             >
-              {index + 1}
-            </span>
+              {index < step ? <CheckCircle2 size={14} /> : index + 1}
+            </div>
             <span
-              className={`text-xs ${index === step ? 'font-medium text-foreground' : 'text-muted-foreground'}`}
+              className={`hidden text-xs sm:block ${
+                index === step ? 'font-semibold text-foreground' : 'text-muted-foreground'
+              }`}
             >
               {title}
             </span>
             {index < STEP_TITLES.length - 1 && (
-              <span className="h-px flex-1 bg-border" aria-hidden />
+              <div
+                className={`h-px flex-1 transition-colors duration-300 ${
+                  index < step ? 'bg-primary' : 'bg-border'
+                }`}
+                aria-hidden
+              />
             )}
           </div>
         ))}
       </div>
 
       {loadError && (
-        <p className="text-sm text-destructive" role="alert">{loadError}</p>
+        <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3">
+          <p className="text-sm text-destructive">{loadError}</p>
+        </div>
       )}
 
-      {/* STEP 1 — person */}
+      {/* STEP 1 — Select person */}
       {step === 0 && (
-        <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="space-y-4 rounded-2xl border border-border bg-card p-6">
+          <h2 className="font-semibold">Who is this change for?</h2>
           <Input
-            label="Find a person"
+            label="Search employees"
             value={search}
             onChange={setSearch}
-            placeholder="Search name or employee number…"
+            placeholder="Search by name or employee number…"
+            leftIcon={<Search size={16} />}
             data-testid="wizard-search"
           />
-          <ul className="max-h-64 space-y-1 overflow-auto" data-testid="wizard-people">
-            {loadingEmployees && <li className="text-sm text-muted-foreground">Loading…</li>}
-            {filtered.map((employee) => (
+          <ul className="max-h-72 space-y-1.5 overflow-y-auto" data-testid="wizard-people">
+            {loadingEmployees && (
+              <li className="space-y-2 py-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-3 rounded-xl border border-border p-3">
+                    <div className="skeleton h-9 w-9 rounded-full" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="skeleton h-4 w-28 rounded" />
+                      <div className="skeleton h-3 w-20 rounded" />
+                    </div>
+                  </div>
+                ))}
+              </li>
+            )}
+            {!loadingEmployees && filtered.map((employee) => (
               <li key={employee.id}>
                 <button
                   type="button"
-                  className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                  className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all duration-150 ${
                     selectedEmployee?.id === employee.id
-                      ? 'border-primary/40 bg-primary/5'
-                      : 'border-transparent hover:border-border hover:bg-muted/40'
+                      ? 'border-primary/50 bg-primary/8 shadow-sm'
+                      : 'border-transparent bg-muted/40 hover:border-border hover:bg-muted/60'
                   }`}
                   onClick={() => setSelectedEmployee(employee)}
                   data-testid={`wizard-person-${employee.employeeNumber}`}
                 >
-                  <span className="font-medium">{employee.name ?? '(unnamed)'}</span>{' '}
-                  <span className="text-xs text-muted-foreground">
-                    · {employee.employeeNumber}
-                    {employee.department ? ` · ${employee.department}` : ''}
-                  </span>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+                    {getInitials(employee.name, employee.employeeNumber)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">{employee.name ?? '(unnamed)'}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {employee.employeeNumber}
+                      {employee.department ? ` · ${employee.department}` : ''}
+                    </div>
+                  </div>
+                  {selectedEmployee?.id === employee.id && (
+                    <CheckCircle2 size={16} className="shrink-0 text-primary" />
+                  )}
                 </button>
               </li>
             ))}
             {!loadingEmployees && filtered.length === 0 && (
-              <li className="text-sm text-muted-foreground">
-                No match — add people on the People page first.
+              <li className="py-6 text-center">
+                <User size={28} className="mx-auto mb-2 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">
+                  No employees found. Add people on the People page first.
+                </p>
               </li>
             )}
           </ul>
         </div>
       )}
 
-      {/* STEP 2 — what */}
+      {/* STEP 2 — Change type */}
       {step === 1 && (
-        <div className="grid grid-cols-2 gap-3" data-testid="wizard-kinds">
-          {CHANGE_KINDS.map(({ kind: k, title, blurb, emoji }) => (
-            <button
-              key={k}
-              type="button"
-              className={`rounded-xl border p-4 text-left transition-colors ${
-                kind === k ? 'border-primary/50 bg-primary/5' : 'border-border bg-card hover:border-primary/20'
-              }`}
-              onClick={() => setKind(k)}
-              data-testid={`wizard-kind-${k}`}
-            >
-              <div className="text-2xl">{emoji}</div>
-              <div className="mt-1 font-medium">{title}</div>
-              <div className="text-xs text-muted-foreground">{blurb}</div>
-            </button>
-          ))}
+        <div className="space-y-4">
+          <h2 className="font-semibold">What needs to change?</h2>
+          <div className="grid grid-cols-2 gap-3" data-testid="wizard-kinds">
+            {CHANGE_KINDS.map(({ kind: k, title, blurb, icon, accentClass }) => (
+              <button
+                key={k}
+                type="button"
+                className={`group flex flex-col gap-3 rounded-2xl border-2 p-5 text-left transition-all duration-200 ${
+                  kind === k
+                    ? `${accentClass} shadow-sm`
+                    : 'border-border bg-card hover:border-primary/25 hover:shadow-sm'
+                }`}
+                onClick={() => setKind(k)}
+                data-testid={`wizard-kind-${k}`}
+              >
+                <div className={`inline-flex rounded-xl p-2.5 ${kind === k ? '' : 'bg-muted'}`}>
+                  {icon}
+                </div>
+                <div>
+                  <div className="font-semibold">{title}</div>
+                  <div className="mt-0.5 text-sm text-muted-foreground">{blurb}</div>
+                </div>
+                {kind === k && (
+                  <CheckCircle2 size={16} className="ml-auto self-end" />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* STEP 3 — details */}
+      {/* STEP 3 — Details */}
       {step === 2 && kind && (
         <form
-          className="space-y-4 rounded-xl border border-border bg-card p-4"
+          className="space-y-5 rounded-2xl border border-border bg-card p-6"
           onSubmit={handleDetail}
           data-testid="wizard-details"
         >
-          {(kind === 'SALARY_CHANGE'
-            ? ['newSalary', 'currency', 'effectiveDate']
-            : kind === 'BANK_ACCOUNT_CHANGE'
-              ? ['iban', 'effectiveDate']
-              : kind === 'ADDRESS_CHANGE'
-                ? ['street', 'city', 'postalCode', 'country', 'effectiveDate']
-                : ['department', 'effectiveDate']
-          ).map((field) => (
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+              {getInitials(selectedEmployee?.name, selectedEmployee?.employeeNumber ?? '')}
+            </div>
+            <div>
+              <p className="font-semibold">{selectedEmployee?.name ?? selectedEmployee?.employeeNumber}</p>
+              <p className="text-xs text-muted-foreground">{changeTypeLabel(kind)}</p>
+            </div>
+          </div>
+
+          <div className="h-px bg-border" />
+
+          {fieldsForKind.map((field) => (
             <div key={field}>
               {field === 'effectiveDate' ? (
-                <>
-                  <span className="mb-1 block text-sm font-medium">Effective date</span>
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 px-1 text-sm font-medium">
+                    <Calendar size={14} className="text-muted-foreground" />
+                    Effective date
+                  </label>
                   <input
                     type="date"
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                    className="flex h-11 w-full rounded-full border border-border bg-transparent px-4 py-1 text-sm outline-none transition-colors focus:border-foreground/40 focus:ring-2 focus:ring-ring/40"
                     data-testid="wizard-effective-date"
+                    value={values.effectiveDate ?? ''}
                     onChange={(e) =>
                       setValues((prev) => ({ ...prev, effectiveDate: e.target.value }))
                     }
                   />
-                </>
+                </div>
               ) : field === 'newSalary' ? (
                 <Input
                   label={FIELD_LABELS[field].label}
                   type="number"
                   value={values[field] ?? ''}
                   onChange={(next) => setValues((prev) => ({ ...prev, [field]: next }))}
-                  placeholder="75000"
+                  placeholder={FIELD_LABELS[field].placeholder}
+                  leftIcon={<DollarSign size={15} />}
                   data-testid={`wizard-field-${field}`}
                 />
               ) : (
@@ -341,67 +441,105 @@ export function RequestChangeView({
         </form>
       )}
 
-      {/* STEP 4 — review */}
+      {/* STEP 4 — Review */}
       {step === 3 && kind && payload && selectedEmployee && (
-        <div className="space-y-4 rounded-xl border border-border bg-card p-4" data-testid="wizard-review">
-          <p className="text-sm">
-            <span className="font-medium">
-              {selectedEmployee.name ?? selectedEmployee.employeeNumber}
-            </span>{' '}
-            ({selectedEmployee.employeeNumber}): {describeRequestedChange(kind, payload)}.
-          </p>
-          <details className="rounded-md border border-border bg-muted/30 p-3">
-            <summary className="cursor-pointer text-xs text-muted-foreground">
-              Simulation (demo environments only)
-            </summary>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Submitting for a reserved demo employee id forces a specific outcome
-              server-side. Real requests leave this on “No simulation”.
+        <div className="space-y-5 rounded-2xl border border-border bg-card p-6" data-testid="wizard-review">
+          <div>
+            <h2 className="font-semibold">Review your request</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Confirm the details before submitting.
             </p>
-            <Select
-              value={simulation}
-              onValueChange={(v) => setSimulation(v)}
-              data-testid="wizard-simulation"
-            >
-              <SelectTrigger className="mt-2 w-72">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No simulation — process normally</SelectItem>
-                <SelectItem value="success">Demo: always succeed</SelectItem>
-                <SelectItem value="retry-recover">Demo: fail twice, then succeed</SelectItem>
-                <SelectItem value="retry-fail">Demo: keep failing (retries)</SelectItem>
-                <SelectItem value="fail-after-retries">Demo: fail after retries</SelectItem>
-                <SelectItem value="permanent">Demo: permanent rejection</SelectItem>
-              </SelectContent>
-            </Select>
-          </details>
+          </div>
+
+          <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+            <p className="text-sm leading-relaxed">
+              <span className="font-semibold text-foreground">
+                {selectedEmployee.name ?? selectedEmployee.employeeNumber}
+              </span>{' '}
+              <span className="text-muted-foreground">({selectedEmployee.employeeNumber}):</span>{' '}
+              {describeRequestedChange(kind, payload)}.
+            </p>
+          </div>
+
+          {/* Summary grid */}
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-muted/40 p-4 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">Employee</p>
+              <p className="mt-0.5 font-medium">{selectedEmployee.name ?? selectedEmployee.employeeNumber}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Change type</p>
+              <p className="mt-0.5 font-medium">{changeTypeLabel(kind)}</p>
+            </div>
+            {values.effectiveDate && (
+              <div>
+                <p className="text-xs text-muted-foreground">Effective date</p>
+                <p className="mt-0.5 font-medium">{values.effectiveDate}</p>
+              </div>
+            )}
+          </div>
+
           {submitError && (
-            <p className="text-sm text-destructive" role="alert" data-testid="wizard-submit-error">
-              {submitError}
-            </p>
+            <div className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3">
+              <p className="text-sm text-destructive" role="alert" data-testid="wizard-submit-error">
+                {submitError}
+              </p>
+            </div>
           )}
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setStep(2)}>
+
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setStep(2)}
+              className="gap-1.5"
+            >
+              <ArrowLeft size={14} />
               Back
             </Button>
-            <Button size="sm" disabled={submitting} onClick={() => void handleSubmit()} data-testid="wizard-submit">
-              {submitting ? 'Submitting…' : 'Submit request'}
+            <Button
+              size="sm"
+              disabled={submitting}
+              onClick={() => void handleSubmit()}
+              data-testid="wizard-submit"
+              className="gap-2"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Submitting…
+                </>
+              ) : (
+                'Submit request'
+              )}
             </Button>
           </div>
         </div>
       )}
 
-      {/* navigation — Next visible from step 0; Back hidden on the first step */}
+      {/* Navigation — Next/Back (steps 0–2) */}
       {step < 3 && (
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           {step > 0 && (
-            <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setStep(step - 1)}
+              className="gap-1.5"
+            >
+              <ArrowLeft size={14} />
               Back
             </Button>
           )}
-          <Button size="sm" disabled={!canNext} onClick={() => setStep(step + 1)} data-testid="wizard-next">
-            Next: {STEP_TITLES[step + 1]}
+          <Button
+            size="sm"
+            disabled={!canNext}
+            onClick={() => setStep(step + 1)}
+            data-testid="wizard-next"
+            className="gap-1.5"
+          >
+            Next
+            <ChevronRight size={14} />
           </Button>
         </div>
       )}

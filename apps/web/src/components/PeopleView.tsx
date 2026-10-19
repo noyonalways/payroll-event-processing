@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import {
+  Search,
+  Plus,
+  X,
+  User,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Archive,
+  ArrowRight,
+} from 'lucide-react';
 
 import { fetchEventStatus, fetchEventsPage } from '../api/events';
 import {
@@ -20,24 +31,41 @@ import type { Employee, EventType } from '../lib/types';
 const errorOf = (error: unknown): string =>
   error instanceof Error ? error.message : 'Request failed';
 
-const typeToTitle = (type: EventType): string =>
-  type.charAt(0) + type.slice(1).toLowerCase().replace('_change', ' change');
+function getInitials(name: string | null | undefined, fallback: string): string {
+  if (!name) return fallback.slice(0, 2).toUpperCase();
+  return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+}
+
+const statusIconMap: Record<string, React.ReactNode> = {
+  great: <CheckCircle2 size={13} className="text-emerald-600 dark:text-emerald-400" />,
+  wait: <Clock size={13} className="text-amber-600 dark:text-amber-400" />,
+  bad: <AlertTriangle size={13} className="text-destructive" />,
+  muted: <X size={13} className="text-muted-foreground" />,
+};
+
+function SkeletonPersonRow() {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-border p-3">
+      <div className="skeleton h-10 w-10 rounded-full" />
+      <div className="flex-1 space-y-1.5">
+        <div className="skeleton h-4 w-32 rounded" />
+        <div className="skeleton h-3 w-20 rounded" />
+      </div>
+      <div className="skeleton h-5 w-14 rounded-full" />
+    </div>
+  );
+}
 
 /**
- * The People view (frontend-app rework): the roster with each person's
- * CURRENT state — the applied bank account, salary, address, and department
- * derived from their successfully applied changes — plus the change timeline
- * and a one-click "Request change" that pre-fills the wizard for them.
- *
- * "Current" is derived from the source of truth (this organization's applied
- * change requests), so what's shown is exactly what the pipeline applied.
+ * The People view: the roster with each person's current pay details derived
+ * from their applied change history, plus a change timeline and a one-click
+ * "Request change" that pre-fills the wizard.
  */
 export function PeopleView({
   refreshKey,
   onRequestChange,
 }: {
   refreshKey: number;
-  /** Fires with the employee number to pre-fill the wizard with. */
   onRequestChange: (employeeNumber: string) => void;
 }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -47,7 +75,7 @@ export function PeopleView({
 
   const [selected, setSelected] = useState<Employee | null>(null);
   const [timeline, setTimeline] = useState<
-    Array<{ id: string; type: EventType; status: ReturnType<typeof requestStatus>; createdAt: string; applied: string }>
+    Array<{ id: string; type: EventType; status: ReturnType<typeof requestStatus>; createdAt: string }>
   >([]);
   const [current, setCurrent] = useState<string[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -77,7 +105,6 @@ export function PeopleView({
     void refresh();
   }, [refresh, refreshKey]);
 
-  // Load the selected person's applied state + change timeline.
   useEffect(() => {
     if (!selected) {
       setTimeline([]);
@@ -100,14 +127,10 @@ export function PeopleView({
             type: e.eventType,
             status: requestStatus(e.status),
             createdAt: e.createdAt,
-            applied: '',
           }));
         if (cancelled) return;
         setTimeline(timelineRows);
 
-        // Current state: for each domain, the newest APPLIED change, with the
-        // "what it became" line from that change's committed result (GET
-        // /events/{id} — list rows carry no values by design).
         const latestApplied: string[] = [];
         for (const type of ['BANK_ACCOUNT_CHANGE', 'SALARY_CHANGE', 'ADDRESS_CHANGE', 'DEPARTMENT_CHANGE'] as EventType[]) {
           const newest = rows
@@ -116,11 +139,9 @@ export function PeopleView({
           if (!newest) continue;
           try {
             const status = await fetchEventStatus(newest.id);
-            latestApplied.push(
-              describeAppliedChange(type, status.payload, status.result),
-            );
+            latestApplied.push(describeAppliedChange(type, status.payload, status.result));
           } catch {
-            latestApplied.push(`${typeToTitle(type)} — applied ${timeAgo(newest.processedAt ?? newest.createdAt)}`);
+            latestApplied.push(`${changeTypeLabel(type)} — applied ${timeAgo(newest.processedAt ?? newest.createdAt)}`);
           }
         }
         if (!cancelled) setCurrent(latestApplied);
@@ -181,26 +202,35 @@ export function PeopleView({
   }
 
   return (
-    <section className="space-y-4" data-testid="people-view">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="space-y-6" data-testid="people-view">
+      {/* Page header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">People</h2>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-2xl font-bold tracking-tight">People</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Your roster — and each person's current pay details at a glance.
           </p>
         </div>
-        <Button size="sm" onClick={() => setAdding((v) => !v)} data-testid="people-add-toggle">
-          {adding ? 'Close' : '+ Add person'}
+        <Button
+          size="sm"
+          variant={adding ? 'outline' : 'default'}
+          onClick={() => setAdding((v) => !v)}
+          data-testid="people-add-toggle"
+          className="gap-2"
+        >
+          {adding ? <><X size={14} /> Cancel</> : <><Plus size={14} /> Add person</>}
         </Button>
       </div>
 
+      {/* Add person form */}
       {adding && (
         <form
-          className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-card p-4"
+          className="rounded-2xl border border-border bg-card p-5"
           onSubmit={handleAdd}
           data-testid="people-add-form"
         >
-          <div className="min-w-36">
+          <h2 className="mb-4 text-sm font-semibold">Add a new employee</h2>
+          <div className="grid gap-4 sm:grid-cols-3">
             <Input
               label="Employee number"
               value={form.employeeNumber}
@@ -208,17 +238,13 @@ export function PeopleView({
               placeholder="EMP-101"
               data-testid="people-add-number"
             />
-          </div>
-          <div className="min-w-40">
             <Input
-              label="Name"
+              label="Full name"
               value={form.name}
               onChange={(next) => setForm((p) => ({ ...p, name: next }))}
               placeholder="Jane Doe"
               data-testid="people-add-name"
             />
-          </div>
-          <div className="min-w-36">
             <Input
               label="Department (optional)"
               value={form.department}
@@ -227,35 +253,59 @@ export function PeopleView({
               data-testid="people-add-department"
             />
           </div>
-          <Button type="submit" size="sm" disabled={busy} data-testid="people-add-submit">
-            Add
-          </Button>
+          <div className="mt-4 flex gap-3">
+            <Button type="submit" size="sm" disabled={busy || !form.employeeNumber.trim() || !form.name.trim()} data-testid="people-add-submit">
+              {busy ? 'Adding…' : 'Add employee'}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          </div>
         </form>
       )}
 
+      {/* Error banners */}
       {actionError && (
-        <p className="text-sm text-destructive" role="alert" data-testid="people-action-error">
-          {actionError}
-        </p>
+        <div
+          className="flex items-center gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
+          role="alert"
+          data-testid="people-action-error"
+        >
+          <AlertTriangle size={15} className="shrink-0 text-destructive" />
+          <p className="text-sm text-destructive">{actionError}</p>
+        </div>
       )}
       {listError && (
-        <p className="text-sm text-destructive" role="alert" data-testid="people-list-error">
-          {listError}
-        </p>
+        <div
+          className="flex items-center gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
+          role="alert"
+          data-testid="people-list-error"
+        >
+          <AlertTriangle size={15} className="shrink-0 text-destructive" />
+          <p className="text-sm text-destructive">{listError}</p>
+        </div>
       )}
 
+      {/* Main grid */}
       {loading ? (
-        <p className="text-sm text-muted-foreground" data-testid="people-loading">
-          Loading…
-        </p>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+        <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
           <div className="space-y-2">
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonPersonRow key={i} />
+            ))}
+          </div>
+          <div className="skeleton h-64 rounded-2xl" />
+        </div>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
+          {/* Employee list */}
+          <div className="space-y-3">
             <Input
               label="Search"
               value={search}
               onChange={setSearch}
-              placeholder="Search name, number, department…"
+              placeholder="Search by name, number, or department…"
+              leftIcon={<Search size={15} />}
               data-testid="people-search"
             />
             <ul className="space-y-2" data-testid="people-list">
@@ -263,132 +313,174 @@ export function PeopleView({
                 <li key={employee.id}>
                   <button
                     type="button"
-                    className={`w-full rounded-lg border p-3 text-left text-sm transition-colors ${
+                    className={`flex w-full items-center gap-3 rounded-xl border p-3.5 text-left transition-all duration-150 ${
                       selected?.id === employee.id
-                        ? 'border-primary/40 bg-primary/5'
-                        : 'border-border bg-card hover:border-primary/20'
+                        ? 'border-primary/40 bg-primary/8 shadow-sm'
+                        : 'border-border bg-card hover:border-primary/25 hover:shadow-sm'
                     }`}
                     onClick={() => setSelected(employee)}
                     data-testid={`people-row-${employee.employeeNumber}`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">{employee.name ?? '(unnamed)'}</span>
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-xs ${
-                          employee.active
-                            ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700'
-                            : 'border-border bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {employee.active ? 'active' : 'archived'}
-                      </span>
+                    {/* Avatar */}
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                        selected?.id === employee.id
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {getInitials(employee.name, employee.employeeNumber)}
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {employee.employeeNumber}
-                      {employee.department ? ` · ${employee.department}` : ''}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">{employee.name ?? '(unnamed)'}</span>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            employee.active
+                              ? 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700'
+                              : 'border-border bg-muted text-muted-foreground'
+                          }`}
+                        >
+                          {employee.active ? 'Active' : 'Archived'}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {employee.employeeNumber}
+                        {employee.department ? ` · ${employee.department}` : ''}
+                      </div>
                     </div>
+                    {selected?.id === employee.id && (
+                      <ArrowRight size={14} className="shrink-0 text-primary" />
+                    )}
                   </button>
                 </li>
               ))}
               {filtered.length === 0 && (
-                <li className="rounded-lg border border-dashed border-border bg-card p-4 text-sm text-muted-foreground">
-                  No people found.
+                <li className="rounded-xl border border-dashed border-border bg-card py-10 text-center">
+                  <User size={28} className="mx-auto mb-2 text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">No employees found.</p>
                 </li>
               )}
             </ul>
           </div>
 
-          <div className="space-y-3 rounded-xl border border-border bg-card p-4" data-testid="person-panel">
+          {/* Detail panel */}
+          <div
+            className="space-y-4 rounded-2xl border border-border bg-card p-5"
+            data-testid="person-panel"
+          >
             {!selected ? (
-              <p className="text-sm text-muted-foreground">
-                Select a person to see their current pay details and change history.
-              </p>
+              <div className="flex h-full min-h-48 flex-col items-center justify-center text-center">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                  <User size={22} className="text-muted-foreground/50" />
+                </div>
+                <p className="text-sm font-medium text-foreground">Select an employee</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Choose someone from the list to see their pay details and history.
+                </p>
+              </div>
             ) : (
               <>
+                {/* Person header */}
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
+                    {getInitials(selected.name, selected.employeeNumber)}
+                  </div>
+                  <div>
+                    <h2 className="font-semibold" data-testid="person-name">
+                      {selected.name ?? '(unnamed)'}
+                    </h2>
+                    <p className="text-xs text-muted-foreground">
+                      {selected.employeeNumber}
+                      {selected.department ? ` · ${selected.department}` : ''}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="h-px bg-border" />
+
+                {/* Current state */}
                 <div>
-                  <h3 className="text-lg font-semibold" data-testid="person-name">
-                    {selected.name ?? '(unnamed)'}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    {selected.employeeNumber}
-                    {selected.department ? ` · ${selected.department}` : ''}
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Current details
                   </p>
-                </div>
-
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Current state
-                  </span>
-                  <ul className="mt-1 space-y-1 text-sm" data-testid="person-current">
-                    {current.length === 0 && (
-                      <li className="text-muted-foreground">
-                        No applied changes yet — everything starts after the first
-                        request is applied.
-                      </li>
-                    )}
-                    {current.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Recent changes
-                  </span>
-                  {timelineLoading ? (
-                    <p className="mt-1 text-sm text-muted-foreground">Loading…</p>
+                  {current.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No applied changes yet — details appear after the first change is processed.
+                    </p>
                   ) : (
-                    <ul className="mt-1 space-y-1.5" data-testid="person-timeline">
-                      {timeline.length === 0 && (
-                        <li className="text-sm text-muted-foreground">No changes yet.</li>
-                      )}
-                      {timeline.map((entry) => (
-                        <li key={entry.id} className="text-sm">
-                          {changeTypeLabel(entry.type)}{' '}
-                          <span
-                            className={`text-xs ${
-                              entry.status.tone === 'great'
-                                ? 'text-emerald-700'
-                                : entry.status.tone === 'bad'
-                                  ? 'text-destructive'
-                                  : 'text-muted-foreground'
-                            }`}
-                          >
-                            · {entry.status.label}
-                          </span>{' '}
-                          <span className="text-xs text-muted-foreground">
-                            · {timeAgo(entry.createdAt)}
-                          </span>
+                    <ul className="space-y-1.5" data-testid="person-current">
+                      {current.map((line) => (
+                        <li key={line} className="flex items-start gap-2 text-sm">
+                          <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-emerald-600" />
+                          {line}
                         </li>
                       ))}
                     </ul>
                   )}
                 </div>
 
-                <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-                  {selected.active && (
-                    <Button
-                      size="sm"
-                      onClick={() => onRequestChange(selected.employeeNumber)}
-                      data-testid="person-request-change"
-                    >
-                      Request a change
-                    </Button>
-                  )}
-                  {selected.active && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive"
-                      disabled={busy}
-                      onClick={() => void handleArchive(selected)}
-                      data-testid="person-archive"
-                    >
-                      Archive
-                    </Button>
+                <div className="h-px bg-border" />
+
+                {/* Change timeline */}
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Change history
+                  </p>
+                  {timelineLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="skeleton h-4 w-full rounded" />
+                      ))}
+                    </div>
+                  ) : timeline.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No changes recorded yet.</p>
+                  ) : (
+                    <ol className="relative space-y-2 border-l-2 border-border pl-4" data-testid="person-timeline">
+                      {timeline.map((entry) => (
+                        <li key={entry.id} className="text-sm">
+                          <div className="absolute -left-[5px] mt-1.5 h-2 w-2 rounded-full border-2 border-background bg-border" />
+                          <div className="flex items-center gap-1.5">
+                            {statusIconMap[entry.status.tone]}
+                            <span className="font-medium">{changeTypeLabel(entry.type)}</span>
+                          </div>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            {entry.status.label} · {timeAgo(entry.createdAt)}
+                          </p>
+                        </li>
+                      ))}
+                    </ol>
                   )}
                 </div>
+
+                {/* Actions */}
+                {selected.active && (
+                  <>
+                    <div className="h-px bg-border" />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => onRequestChange(selected.employeeNumber)}
+                        data-testid="person-request-change"
+                        className="gap-1.5"
+                      >
+                        <ArrowRight size={13} />
+                        Request a change
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="gap-1.5 text-muted-foreground hover:bg-muted"
+                        disabled={busy}
+                        onClick={() => void handleArchive(selected)}
+                        data-testid="person-archive"
+                      >
+                        <Archive size={13} />
+                        Archive
+                      </Button>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>

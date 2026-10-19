@@ -125,7 +125,7 @@ export function describeAppliedChange(
   result: Record<string, unknown> | null,
 ): string {
   const ack = (result?.acknowledged ?? {}) as Record<string, unknown>;
-  const source = Object.keys(ack).length > 0 ? ack : (payload ?? {});
+  const source = (Object.keys(ack).length > 0 ? ack : (payload ?? {})) as Record<string, any>;
   const effective = dateLabel(
     typeof source.effectiveDate === 'string' ? source.effectiveDate : null,
   );

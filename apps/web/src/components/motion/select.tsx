@@ -421,7 +421,7 @@ export function SelectItem({
   }, [ctx.register, ctx.unregister, value, label]);
 
   return (
-    <motion.li variants={ctx.reduce ? undefined : ITEM_VARIANTS}>
+    <motion.div variants={ctx.reduce ? undefined : ITEM_VARIANTS}>
       <button
         type="button"
         role="option"
@@ -441,6 +441,6 @@ export function SelectItem({
         {children}
         {selected ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
       </button>
-    </motion.li>
+    </motion.div>
   );
 }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ApiError,
   NetworkError,
+  SessionExpiredError,
   deleteProviderConfig as deleteProviderConfigApi,
   fetchProviderConfig,
   upsertProviderConfig as upsertProviderConfigApi,

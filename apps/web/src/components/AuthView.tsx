@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { LogIn, Building2, KeyRound, Mail, User, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 import { Input } from '@/components/motion/input';
 import { Button } from '@/components/ui/button';
@@ -16,12 +17,10 @@ export interface AuthViewProps {
 type Mode = 'signin' | 'register' | 'forgot' | 'reset';
 
 /**
- * The signed-out gate: one view with both ways in — sign in to an existing
- * account, or register a new organization with the caller as its owner. The API
- * stays the authority on validation: a structured 400/401/409 is surfaced
- * inline and the typed values are kept, so a bad email or short password does
- * not cost the user their input. A successful call hands the session to the
- * caller (`onAuthenticated`) — persisting it is the app shell's job.
+ * Production auth gate: split-panel design with a branded left panel and a
+ * clean right-panel form. Supports sign-in, organization registration,
+ * forgot-password, and inline password-reset flows. The API is the authority
+ * on validation; structured errors surface inline without losing user input.
  */
 export function AuthView({ onAuthenticated }: AuthViewProps) {
   const [mode, setMode] = useState<Mode>('signin');
@@ -31,9 +30,6 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
   const [organizationName, setOrganizationName] = useState('');
   const [apiError, setApiError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // Password reset (auth-hardening): the forgot step displays the one-time
-  // token for hand-off AND offers the inline hand-off — "reset now" carries
-  // the token into the reset step without the user retyping it.
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -52,9 +48,6 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
     setSubmitting(true);
     setApiError(null);
     try {
-      // Anti-enumeration: the API answers identically for unknown emails.
-      // The ack's token presence is the hand-off, NOT a confirmation the
-      // account exists — this view never claims either way.
       const ack = await forgotPassword(email.trim());
       if (ack.token) {
         setResetToken(ack.token);
@@ -62,8 +55,7 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
         setNotice(null);
       } else {
         setNotice(
-          'If an account exists for this email, a reset link was issued to its owner. ' +
-            'This deployment hands the link out-of-band, so if you know the owner, share it with them.',
+          'If an account exists for this email, a reset link was issued. This deployment hands the link out-of-band.',
         );
       }
     } catch (err) {
@@ -84,7 +76,6 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
     setApiError(null);
     try {
       await resetPassword(resetToken, password);
-      // sessionless by design: the user signs in with the NEW password.
       setResetToken(null);
       setMode('signin');
       setNotice('Password updated. Sign in with your new password.');
@@ -124,116 +115,195 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
     }
   }
 
-  return (
-    <main className="min-h-screen bg-muted/40 p-6 text-foreground dark:bg-background">
-      <div className="mx-auto flex min-h-[80vh] max-w-md flex-col justify-center">
-        <header className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Payroll Events
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Sign in to submit typed payroll events and watch them progress
-            through the processing pipeline in real time.
-          </p>
-        </header>
+  const formTitle =
+    mode === 'forgot'
+      ? 'Reset your password'
+      : mode === 'reset'
+        ? 'Set a new password'
+        : registering
+          ? 'Create your organization'
+          : 'Sign in to your workspace';
 
-        <form
-          onSubmit={(event) => {
-            if (mode === 'forgot') {
-              void handleForgot(event);
-            } else if (mode === 'reset') {
-              void handleReset(event);
-            } else {
-              void handleSubmit(event);
-            }
-          }}
-          className="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm"
-        >
-          <div className="mb-4 grid grid-cols-2 gap-1 rounded-full border border-border bg-muted/40 p-1">
-            <Button
-              type="button"
-              variant={mode === 'signin' ? 'default' : 'ghost'}
-              size="sm"
-              className="rounded-full"
-              aria-pressed={mode === 'signin'}
-              onClick={() => switchMode('signin')}
-            >
-              Sign in
-            </Button>
-            <Button
-              type="button"
-              variant={registering ? 'default' : 'ghost'}
-              size="sm"
-              className="rounded-full"
-              aria-pressed={registering}
-              onClick={() => switchMode('register')}
-            >
-              Register
-            </Button>
+  const formSubtitle =
+    mode === 'forgot'
+      ? 'Enter your email and we\'ll issue a reset link.'
+      : mode === 'reset'
+        ? 'Choose a strong password — at least 12 characters.'
+        : registering
+          ? 'Start processing payroll events in minutes.'
+          : 'Track every payroll change from submission to outcome.';
+
+  return (
+    <div className="flex min-h-screen bg-background">
+      {/* ── Left branding panel ─────────────────────────────── */}
+      <div className="hidden lg:flex lg:w-[480px] lg:flex-col lg:justify-between bg-primary px-12 py-16 text-primary-foreground">
+        {/* Logo */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 shadow-sm backdrop-blur-sm">
+            <span className="text-sm font-bold">PR</span>
+          </div>
+          <span className="text-xl font-semibold">PayrollOS</span>
+        </div>
+
+        {/* Main copy */}
+        <div className="space-y-6">
+          <h1 className="text-4xl font-bold leading-tight tracking-tight">
+            Payroll events,<br />end to end.
+          </h1>
+          <p className="text-base leading-relaxed text-primary-foreground/80">
+            Submit salary changes, bank account updates, department moves, and address
+            changes — and watch each one move through the processing pipeline in real time.
+          </p>
+
+          {/* Feature list */}
+          <ul className="space-y-3">
+            {[
+              'Real-time lifecycle tracking via SSE',
+              'Automatic retries with DLQ fallback',
+              'HMAC-signed webhook deliveries',
+              'Role-based access control',
+            ].map((feature) => (
+              <li key={feature} className="flex items-center gap-3 text-sm text-primary-foreground/90">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/20">
+                  <CheckCircle2 size={12} />
+                </span>
+                {feature}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Bottom quote */}
+        <p className="text-xs text-primary-foreground/50">
+          © {new Date().getFullYear()} PayrollOS. All changes are audited and immutable.
+        </p>
+      </div>
+
+      {/* ── Right form panel ────────────────────────────────── */}
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
+        {/* Mobile logo */}
+        <div className="mb-8 flex items-center gap-2 lg:hidden">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+            <span className="text-xs font-bold text-primary-foreground">PR</span>
+          </div>
+          <span className="text-lg font-semibold">PayrollOS</span>
+        </div>
+
+        <div className="w-full max-w-sm">
+          {/* Form header */}
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold tracking-tight text-foreground">{formTitle}</h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">{formSubtitle}</p>
           </div>
 
-          {apiError && (
-            <p
-              role="alert"
-              className="mb-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-              {apiError}
-            </p>
+          {/* Mode switcher — only for signin / register */}
+          {(mode === 'signin' || mode === 'register') && (
+            <div className="mb-6 flex rounded-xl border border-border bg-muted/50 p-1">
+              <button
+                type="button"
+                className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-all duration-200 ${
+                  mode === 'signin'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                aria-pressed={mode === 'signin'}
+                onClick={() => switchMode('signin')}
+              >
+                <LogIn size={14} />
+                Sign in
+              </button>
+              <button
+                type="button"
+                className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-all duration-200 ${
+                  registering
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                aria-pressed={registering}
+                onClick={() => switchMode('register')}
+              >
+                <Building2 size={14} />
+                Register
+              </button>
+            </div>
           )}
 
-          {notice && (
-            <p
-              className="mb-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-foreground"
+          {/* Error banner */}
+          {apiError && (
+            <div
+              role="alert"
+              className="mb-5 flex items-start gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
+            >
+              <AlertCircle size={16} className="mt-0.5 shrink-0 text-destructive" />
+              <p className="text-sm text-destructive">{apiError}</p>
+            </div>
+          )}
+
+          {/* Notice banner */}
+          {notice && !apiError && (
+            <div
+              className="mb-5 flex items-start gap-3 rounded-xl border border-primary/20 bg-primary/8 px-4 py-3"
               data-testid="auth-notice"
             >
-              {notice}
-            </p>
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-primary" />
+              <p className="text-sm text-foreground">{notice}</p>
+            </div>
           )}
 
-          {mode === 'forgot' ? (
-            <>
+          {/* ── Forgot password form ── */}
+          {mode === 'forgot' && (
+            <form onSubmit={(e) => void handleForgot(e)} className="space-y-4">
               <Input
-                label="Email"
+                label="Email address"
                 type="email"
                 value={email}
                 onChange={setEmail}
                 autoComplete="email"
-                placeholder="owner@acme.example"
+                placeholder="you@company.com"
+                leftIcon={<Mail size={16} />}
                 data-testid="forgot-email"
               />
               {notice && (
-                <p
-                  className="mt-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground"
+                <div
+                  className="rounded-xl border border-primary/20 bg-primary/8 px-4 py-3 text-sm text-foreground"
                   data-testid="forgot-notice"
                 >
                   {notice}
-                </p>
+                </div>
               )}
               <Button
                 type="submit"
                 size="lg"
-                className="mt-4 w-full shadow-sm"
-                disabled={submitting}
+                className="w-full"
+                disabled={submitting || !email.trim()}
                 data-testid="auth-submit"
               >
-                {submitting ? 'Requesting…' : 'Request reset'}
+                {submitting ? 'Sending…' : 'Send reset link'}
               </Button>
               <button
                 type="button"
-                className="mt-3 w-full text-center text-xs text-muted-foreground hover:underline"
+                className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => switchMode('signin')}
               >
-                Back to sign in
+                ← Back to sign in
               </button>
-            </>
-          ) : mode === 'reset' ? (
-            <>
-              <p
-                className="mb-3 select-all rounded-md border border-primary/20 bg-primary/5 px-3 py-2 font-mono text-[11px] break-all"
-                data-testid="reset-token-display"
-              >
-                {resetToken}
-              </p>
+            </form>
+          )}
+
+          {/* ── Reset password form ── */}
+          {mode === 'reset' && (
+            <form onSubmit={(e) => void handleReset(e)} className="space-y-4">
+              {resetToken && (
+                <div className="rounded-xl border border-border bg-muted/50 px-4 py-3">
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">Reset token</p>
+                  <p
+                    data-testid="reset-token-display"
+                    className="select-all break-all font-mono text-[11px] text-foreground"
+                  >
+                    {resetToken}
+                  </p>
+                </div>
+              )}
               <Input
                 label="New password"
                 type="password"
@@ -241,83 +311,85 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
                 onChange={setPassword}
                 autoComplete="new-password"
                 placeholder="At least 12 characters"
+                leftIcon={<KeyRound size={16} />}
               />
               <Button
                 type="submit"
                 size="lg"
-                className="mt-4 w-full shadow-sm"
+                className="w-full"
                 disabled={submitting || password.length < 12}
                 data-testid="auth-submit"
               >
                 {submitting ? 'Updating…' : 'Set new password'}
               </Button>
-            </>
-          ) : (
-            <>
+            </form>
+          )}
+
+          {/* ── Sign in / Register form ── */}
+          {(mode === 'signin' || mode === 'register') && (
+            <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
               <Input
-                label="Email"
+                label="Email address"
                 type="email"
                 value={email}
                 onChange={setEmail}
                 autoComplete="email"
-                placeholder="owner@acme.example"
+                placeholder="you@company.com"
+                leftIcon={<Mail size={16} />}
               />
 
-              <div className="mt-3">
-                <Input
-                  label="Password"
-                  type="password"
-                  value={password}
-                  onChange={setPassword}
-                  autoComplete={registering ? 'new-password' : 'current-password'}
-                  placeholder={registering ? 'At least 12 characters' : undefined}
-                />
-              </div>
+              <Input
+                label="Password"
+                type="password"
+                value={password}
+                onChange={setPassword}
+                autoComplete={registering ? 'new-password' : 'current-password'}
+                placeholder={registering ? 'At least 12 characters' : '••••••••'}
+                leftIcon={<KeyRound size={16} />}
+              />
 
               {registering && (
                 <>
-                  <div className="mt-3">
-                    <Input
-                      label="Your name (optional)"
-                      value={name}
-                      onChange={setName}
-                      autoComplete="name"
-                      placeholder="Ada Lovelace"
-                    />
-                  </div>
-                  <div className="mt-3">
-                    <Input
-                      label="Organization name"
-                      value={organizationName}
-                      onChange={setOrganizationName}
-                      autoComplete="organization"
-                      placeholder="Acme Payroll"
-                    />
-                  </div>
+                  <Input
+                    label="Your name (optional)"
+                    value={name}
+                    onChange={setName}
+                    autoComplete="name"
+                    placeholder="Ada Lovelace"
+                    leftIcon={<User size={16} />}
+                  />
+                  <Input
+                    label="Organization name"
+                    value={organizationName}
+                    onChange={setOrganizationName}
+                    autoComplete="organization"
+                    placeholder="Acme Payroll"
+                    leftIcon={<Building2 size={16} />}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Registering creates a new organization with you as its Owner.
+                    Passwords must be at least 12 characters.
+                  </p>
                 </>
               )}
 
-              <p className="mt-2 px-1 text-xs text-muted-foreground">
-                {registering
-                  ? 'Registering creates a new organization with you as its owner — passwords must be at least 12 characters.'
-                  : 'Use the account you registered your organization with.'}
-              </p>
-
               {!registering && (
-                <button
-                  type="button"
-                  className="mt-2 text-xs text-muted-foreground hover:underline"
-                  onClick={() => switchMode('forgot')}
-                  data-testid="forgot-link"
-                >
-                  Forgot password?
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-primary transition-colors"
+                    onClick={() => switchMode('forgot')}
+                    data-testid="forgot-link"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
               )}
 
               <Button
                 type="submit"
                 size="lg"
-                className="mt-4 w-full shadow-sm"
+                className="w-full"
                 disabled={submitting}
                 data-testid="auth-submit"
               >
@@ -329,10 +401,10 @@ export function AuthView({ onAuthenticated }: AuthViewProps) {
                     ? 'Signing in…'
                     : 'Sign in'}
               </Button>
-            </>
+            </form>
           )}
-        </form>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }

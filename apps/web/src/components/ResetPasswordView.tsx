@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { KeyRound, AlertTriangle, CheckCircle2, LogIn } from 'lucide-react';
 
 import { Input } from '@/components/motion/input';
 import { Button } from '@/components/ui/button';
@@ -25,10 +26,8 @@ export function resetTokenFromLocation(
 }
 
 /**
- * The standalone password-reset state (auth-hardening UI) reached by opening
- * the reset link handed out by the account owner. One password field (the
- * strength policy is the API's — 12+ characters); completion routes back to
- * sign-in with a confirmation, and every dead token is one opaque error.
+ * Standalone password-reset view reached by opening the reset link. One
+ * password field (minimum 12 characters); completion routes back to sign-in.
  */
 export function ResetPasswordView() {
   const token = resetTokenFromLocation();
@@ -58,44 +57,55 @@ export function ResetPasswordView() {
 
   if (!token) {
     return (
-      <main className="min-h-screen bg-muted/40 p-6 text-foreground dark:bg-background">
-        <div className="mx-auto max-w-md pt-24" data-testid="reset-missing-token">
-          <h1 className="text-xl font-semibold tracking-tight">Reset link invalid</h1>
+      <div className="flex min-h-screen items-center justify-center bg-background p-6" data-testid="reset-missing-token">
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-destructive/10">
+            <AlertTriangle size={24} className="text-destructive" />
+          </div>
+          <h1 className="text-lg font-semibold">Reset link invalid</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This page needs a password-reset link. Ask the account owner to
-            request a new one.
+            This page requires a password-reset link. Ask the account owner to request a new one.
           </p>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-muted/40 p-6 text-foreground dark:bg-background">
-      <div className="mx-auto max-w-md pt-24" data-testid="reset-password-view">
-        <h1 className="text-xl font-semibold tracking-tight">Set a new password</h1>
+    <div className="flex min-h-screen items-center justify-center bg-background p-6" data-testid="reset-password-view">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
+            <span className="text-sm font-bold text-primary-foreground">PR</span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">Set a new password</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Choose a strong password — at least 12 characters.
+          </p>
+        </div>
+
         {done ? (
-          <div className="mt-4 space-y-3" data-testid="reset-done">
-            <p className="text-sm text-muted-foreground">
-              Password updated, and every active session for the account was
-              signed out. Go back to the app and sign in with the new password.
+          <div className="rounded-2xl border border-border bg-card p-8 text-center" data-testid="reset-done">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/12">
+              <CheckCircle2 size={28} className="text-emerald-600" />
+            </div>
+            <h2 className="text-lg font-semibold">Password updated</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Every active session was signed out. Sign in with your new password.
             </p>
             <Button
               type="button"
-              size="sm"
-              onClick={() => {
-                window.location.href = '/';
-              }}
+              size="lg"
+              className="mt-6 w-full gap-2"
+              onClick={() => { window.location.href = '/'; }}
               data-testid="reset-go-signin"
             >
+              <LogIn size={16} />
               Go to sign in
             </Button>
           </div>
         ) : (
-          <form
-            className="mt-4 space-y-3 rounded-xl border border-border bg-card p-5"
-            onSubmit={handleSubmit}
-          >
+          <form className="space-y-4" onSubmit={handleSubmit}>
             <Input
               label="New password"
               type="password"
@@ -103,15 +113,22 @@ export function ResetPasswordView() {
               onChange={setPassword}
               autoComplete="new-password"
               placeholder="At least 12 characters"
+              leftIcon={<KeyRound size={15} />}
             />
             {error && (
-              <p className="text-sm text-destructive" role="alert" data-testid="reset-error">
-                {error}
-              </p>
+              <div
+                className="flex items-center gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
+                role="alert"
+                data-testid="reset-error"
+              >
+                <AlertTriangle size={15} className="shrink-0 text-destructive" />
+                <p className="text-sm text-destructive">{error}</p>
+              </div>
             )}
             <Button
               type="submit"
-              size="sm"
+              size="lg"
+              className="w-full"
               disabled={submitting || password.length < 12}
               data-testid="reset-submit"
             >
@@ -120,6 +137,6 @@ export function ResetPasswordView() {
           </form>
         )}
       </div>
-    </main>
+    </div>
   );
 }
