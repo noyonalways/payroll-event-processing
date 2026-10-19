@@ -21,6 +21,7 @@ import {
 
 import { Button } from './ui/button';
 import { Input } from '@/components/motion/input';
+import { AnimatedBadge } from '@repo/ui/animated-badge';
 import { useWebhooks } from '../lib/useWebhooks';
 import { getSession } from '../lib/session';
 import type { WebhookDelivery } from '../lib/types';
@@ -280,16 +281,12 @@ export function WebhooksView() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold">{endpoint.label}</span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                      endpoint.active
-                        ? 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
-                        : 'border-border bg-muted text-muted-foreground'
-                    }`}
+                  <AnimatedBadge
+                    status={endpoint.active ? 'success' : 'neutral'}
+                    size="sm"
                   >
-                    {endpoint.active ? <CheckCircle2 size={10} /> : <Pause size={10} />}
                     {endpoint.active ? 'Active' : 'Paused'}
-                  </span>
+                  </AnimatedBadge>
                 </div>
                 <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                   {endpoint.url}

@@ -13,6 +13,14 @@ import {
   Plug,
   UserCog,
 } from 'lucide-react';
+import {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@repo/ui/breadcrumb';
 
 import { logout } from './api/auth';
 import { AuthView } from './components/AuthView';
@@ -248,11 +256,27 @@ function PayrollWorkspace({ session }: { session: StoredSession }) {
         {/* Desktop page header + content */}
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-6xl px-6 py-8">
-            {/* Desktop breadcrumb / page title */}
-            <div className="mb-6 hidden items-center gap-2 lg:flex">
-              <span className="text-xs text-muted-foreground">PayrollOS</span>
-              <ChevronRight size={12} className="text-muted-foreground" />
-              <span className="text-xs font-medium text-foreground">{activeLabel}</span>
+            {/* Desktop beUI breadcrumb */}
+            <div className="mb-6 hidden lg:block">
+              <Breadcrumb data-testid="app-breadcrumb">
+                <BreadcrumbList>
+                  <BreadcrumbItem key="root">
+                    <BreadcrumbLink
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigateTo('dashboard');
+                      }}
+                    >
+                      PayrollOS
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem key={view}>
+                    <BreadcrumbPage>{activeLabel}</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </BreadcrumbList>
+              </Breadcrumb>
             </div>
 
             {view === 'dashboard' ? (

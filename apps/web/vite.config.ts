@@ -14,10 +14,26 @@ export default defineConfig({
     include: ['@repo/shared'],
   },
   resolve: {
-    alias: {
-      // `import.meta.url` form instead of `__dirname`: the config is ESM, so
-      // CommonJS globals are unavailable at runtime.
-      '@': path.resolve(fileURLToPath(new URL('.', import.meta.url)), 'src'),
-    },
+    // `source` outranks `import` so @repo/ui resolves to src, never dist.
+    conditions: ['source', 'import', 'module', 'browser', 'default'],
+    // Array form: object aliases cannot mix regex `find` entries.
+    alias: [
+      {
+        // `import.meta.url` form instead of `__dirname`: the config is ESM, so
+        // CommonJS globals are unavailable at runtime.
+        find: /^@\//,
+        replacement: `${path.resolve(fileURLToPath(new URL('.', import.meta.url)), 'src')}/`,
+      },
+      // beUI components are vendored into @repo/ui and keep their upstream
+      // `@beui/*` imports. Both the prebuilt dist and the TS source resolve
+      // back to the package's src, so the app always compiles one copy.
+      {
+        find: '@beui',
+        replacement: path.resolve(
+          fileURLToPath(new URL('.', import.meta.url)),
+          '../../packages/ui/src',
+        ),
+      },
+    ],
   },
 });

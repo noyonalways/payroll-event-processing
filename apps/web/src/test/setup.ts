@@ -48,6 +48,43 @@ if (typeof globalThis !== 'undefined' && !('ResizeObserver' in globalThis)) {
     ResizeObserverStub as unknown as typeof ResizeObserver
 }
 
+// jsdom has no IntersectionObserver; beUI motion components (such as AnimatedNumber)
+// observe viewport intersections. A realistic stub keeps them functional during tests.
+if (typeof globalThis !== 'undefined' && !('IntersectionObserver' in globalThis)) {
+  class IntersectionObserverStub {
+    readonly root: Element | null = null;
+    readonly rootMargin: string = '';
+    readonly thresholds: ReadonlyArray<number> = [];
+    private callback: IntersectionObserverCallback;
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      this.callback(
+        [
+          {
+            isIntersecting: true,
+            target,
+            intersectionRatio: 1,
+            boundingClientRect: target.getBoundingClientRect(),
+            intersectionRect: target.getBoundingClientRect(),
+            rootBounds: null,
+            time: Date.now(),
+          } as IntersectionObserverEntry,
+        ],
+        this as unknown as IntersectionObserver,
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  }
+  globalThis.IntersectionObserver =
+    IntersectionObserverStub as unknown as typeof IntersectionObserver;
+}
+
 // vitest runs without globals, so React Testing Library's auto-cleanup never
 // registers; unmount every rendered tree after each test explicitly.
 afterEach(() => cleanup())

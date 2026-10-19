@@ -20,6 +20,7 @@ import {
 } from '../api/employees';
 import { Button } from './ui/button';
 import { Input } from '@/components/motion/input';
+import { AnimatedBadge } from '@repo/ui/animated-badge';
 import {
   changeTypeLabel,
   describeAppliedChange,
@@ -334,15 +335,12 @@ export function PeopleView({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold">{employee.name ?? '(unnamed)'}</span>
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                            employee.active
-                              ? 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700'
-                              : 'border-border bg-muted text-muted-foreground'
-                          }`}
+                        <AnimatedBadge
+                          status={employee.active ? 'success' : 'neutral'}
+                          size="sm"
                         >
                           {employee.active ? 'Active' : 'Archived'}
-                        </span>
+                        </AnimatedBadge>
                       </div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {employee.employeeNumber}

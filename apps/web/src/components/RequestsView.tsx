@@ -22,6 +22,7 @@ import {
 import { fetchEmployeesPage } from '../api/employees';
 import { Button } from './ui/button';
 import { Input } from '@/components/motion/input';
+import { AnimatedBadge } from '@repo/ui/animated-badge';
 import {
   changeTypeLabel,
   dateLabel,
@@ -48,13 +49,6 @@ const QUICK_FILTERS: Array<{
   { id: 'failed', label: 'Failed', icon: <AlertTriangle size={13} /> },
   { id: 'cancelled', label: 'Withdrawn', icon: <XCircle size={13} /> },
 ];
-
-const STATUS_CLASSES: Record<string, string> = {
-  great: 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-400',
-  wait: 'border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-400',
-  bad: 'border-destructive/30 bg-destructive/12 text-destructive',
-  muted: 'border-border bg-muted text-muted-foreground',
-};
 
 function SkeletonRow() {
   return (
@@ -343,11 +337,21 @@ export function RequestsView({ refreshKey }: { refreshKey: number }) {
                   </button>
 
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_CLASSES[status.tone]}`}
+                    <AnimatedBadge
+                      status={
+                        status.tone === 'great'
+                          ? 'success'
+                          : status.tone === 'wait'
+                            ? 'warning'
+                            : status.tone === 'bad'
+                              ? 'danger'
+                              : 'neutral'
+                      }
+                      size="sm"
+                      pulse={status.tone === 'wait'}
                     >
                       {status.label}
-                    </span>
+                    </AnimatedBadge>
                     {event.status === 'failed' && (
                       <Button
                         size="sm"

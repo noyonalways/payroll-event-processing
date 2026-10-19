@@ -28,6 +28,8 @@ import {
 } from '../lib/humanize';
 import type { Employee, EventListItem } from '../lib/types';
 import { Button } from './ui/button';
+import { AnimatedNumber } from '@repo/ui/animated-number';
+import { AnimatedBadge } from '@repo/ui/animated-badge';
 
 const errorOf = (error: unknown): string =>
   error instanceof Error ? error.message : 'Request failed';
@@ -67,21 +69,26 @@ export function useDashboardData(refreshKey: number) {
   return { employees, events, loading, error, refresh };
 }
 
-const STATUS_TONE_CLASS: Record<string, string> = {
-  great: 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-400',
-  wait: 'border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-400',
-  bad: 'border-destructive/30 bg-destructive/12 text-destructive',
-  muted: 'border-border bg-muted text-muted-foreground',
-};
 
 export function StatusChip({ status }: { status: EventListItem['status'] }) {
   const s = requestStatus(status);
+  const badgeStatus =
+    s.tone === 'great'
+      ? 'success'
+      : s.tone === 'wait'
+        ? 'warning'
+        : s.tone === 'bad'
+          ? 'danger'
+          : 'neutral';
+
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_TONE_CLASS[s.tone]}`}
+    <AnimatedBadge
+      status={badgeStatus}
+      size="sm"
+      pulse={s.tone === 'wait'}
     >
       {s.label}
-    </span>
+    </AnimatedBadge>
   );
 }
 
@@ -120,7 +127,7 @@ function StatCard({ icon, value, label, colorClass, bgClass, onClick, testId }: 
         {icon}
       </div>
       <div className={`text-3xl font-bold tabular-nums tracking-tight ${colorClass}`}>
-        {value.toLocaleString()}
+        <AnimatedNumber value={value} startOnView={false} />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted-foreground">
         {label}

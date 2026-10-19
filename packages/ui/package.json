@@ -1,0 +1,930 @@
+{
+  "name": "@repo/ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared UI library. The beUI component set (https://beui.dev) is vendored into src/components and re-exported per component slug.",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./src/index.ts"
+    },
+    "./action-swap-blur": {
+      "source": "./src/components/motion/action-swap-blur.tsx",
+      "types": "./dist/components/motion/action-swap-blur.d.ts",
+      "import": "./dist/components/motion/action-swap-blur.js",
+      "default": "./src/components/motion/action-swap-blur.tsx"
+    },
+    "./action-swap-cascade": {
+      "source": "./src/components/motion/action-swap-cascade.tsx",
+      "types": "./dist/components/motion/action-swap-cascade.d.ts",
+      "import": "./dist/components/motion/action-swap-cascade.js",
+      "default": "./src/components/motion/action-swap-cascade.tsx"
+    },
+    "./action-swap-roll": {
+      "source": "./src/components/motion/action-swap-roll.tsx",
+      "types": "./dist/components/motion/action-swap-roll.d.ts",
+      "import": "./dist/components/motion/action-swap-roll.js",
+      "default": "./src/components/motion/action-swap-roll.tsx"
+    },
+    "./adaptive-stepper": {
+      "source": "./src/components/motion/adaptive-stepper.tsx",
+      "types": "./dist/components/motion/adaptive-stepper.d.ts",
+      "import": "./dist/components/motion/adaptive-stepper.js",
+      "default": "./src/components/motion/adaptive-stepper.tsx"
+    },
+    "./agent-activity": {
+      "source": "./src/components/agents/agent-activity/index.tsx",
+      "types": "./dist/components/agents/agent-activity/index.d.ts",
+      "import": "./dist/components/agents/agent-activity/index.js",
+      "default": "./src/components/agents/agent-activity/index.tsx"
+    },
+    "./agent-progress": {
+      "source": "./src/components/agents/loading-states/agent-progress.tsx",
+      "types": "./dist/components/agents/loading-states/agent-progress.d.ts",
+      "import": "./dist/components/agents/loading-states/agent-progress.js",
+      "default": "./src/components/agents/loading-states/agent-progress.tsx"
+    },
+    "./ai-sidebar": {
+      "source": "./src/components/agents/ai-sidebar.tsx",
+      "types": "./dist/components/agents/ai-sidebar.d.ts",
+      "import": "./dist/components/agents/ai-sidebar.js",
+      "default": "./src/components/agents/ai-sidebar.tsx"
+    },
+    "./alert": {
+      "source": "./src/components/motion/alert.tsx",
+      "types": "./dist/components/motion/alert.d.ts",
+      "import": "./dist/components/motion/alert.js",
+      "default": "./src/components/motion/alert.tsx"
+    },
+    "./animated-badge": {
+      "source": "./src/components/motion/animated-badge.tsx",
+      "types": "./dist/components/motion/animated-badge.d.ts",
+      "import": "./dist/components/motion/animated-badge.js",
+      "default": "./src/components/motion/animated-badge.tsx"
+    },
+    "./animated-number": {
+      "source": "./src/components/motion/animated-number.tsx",
+      "types": "./dist/components/motion/animated-number.d.ts",
+      "import": "./dist/components/motion/animated-number.js",
+      "default": "./src/components/motion/animated-number.tsx"
+    },
+    "./animated-sidebar": {
+      "source": "./src/components/motion/animated-sidebar.tsx",
+      "types": "./dist/components/motion/animated-sidebar.d.ts",
+      "import": "./dist/components/motion/animated-sidebar.js",
+      "default": "./src/components/motion/animated-sidebar.tsx"
+    },
+    "./animated-toast-stack": {
+      "source": "./src/components/motion/animated-toast-stack.tsx",
+      "types": "./dist/components/motion/animated-toast-stack.d.ts",
+      "import": "./dist/components/motion/animated-toast-stack.js",
+      "default": "./src/components/motion/animated-toast-stack.tsx"
+    },
+    "./app-button": {
+      "source": "./src/app/button.tsx",
+      "types": "./dist/app/button.d.ts",
+      "import": "./dist/app/button.js",
+      "default": "./src/app/button.tsx"
+    },
+    "./approval-card": {
+      "source": "./src/components/agents/approval-card/index.tsx",
+      "types": "./dist/components/agents/approval-card/index.d.ts",
+      "import": "./dist/components/agents/approval-card/index.js",
+      "default": "./src/components/agents/approval-card/index.tsx"
+    },
+    "./arc-picker": {
+      "source": "./src/components/motion/arc-picker.tsx",
+      "types": "./dist/components/motion/arc-picker.d.ts",
+      "import": "./dist/components/motion/arc-picker.js",
+      "default": "./src/components/motion/arc-picker.tsx"
+    },
+    "./aspect-ratio": {
+      "source": "./src/components/motion/aspect-ratio.tsx",
+      "types": "./dist/components/motion/aspect-ratio.d.ts",
+      "import": "./dist/components/motion/aspect-ratio.js",
+      "default": "./src/components/motion/aspect-ratio.tsx"
+    },
+    "./attachment-upload": {
+      "source": "./src/components/motion/attachment-upload.tsx",
+      "types": "./dist/components/motion/attachment-upload.d.ts",
+      "import": "./dist/components/motion/attachment-upload.js",
+      "default": "./src/components/motion/attachment-upload.tsx"
+    },
+    "./availability-scheduler": {
+      "source": "./src/components/motion/availability-scheduler/index.tsx",
+      "types": "./dist/components/motion/availability-scheduler/index.d.ts",
+      "import": "./dist/components/motion/availability-scheduler/index.js",
+      "default": "./src/components/motion/availability-scheduler/index.tsx"
+    },
+    "./bloom-menu": {
+      "source": "./src/components/motion/bloom-menu.tsx",
+      "types": "./dist/components/motion/bloom-menu.d.ts",
+      "import": "./dist/components/motion/bloom-menu.js",
+      "default": "./src/components/motion/bloom-menu.tsx"
+    },
+    "./bottom-sheet": {
+      "source": "./src/components/motion/bottom-sheet.tsx",
+      "types": "./dist/components/motion/bottom-sheet.d.ts",
+      "import": "./dist/components/motion/bottom-sheet.js",
+      "default": "./src/components/motion/bottom-sheet.tsx"
+    },
+    "./bounce-sidebar": {
+      "source": "./src/components/motion/bounce-sidebar.tsx",
+      "types": "./dist/components/motion/bounce-sidebar.d.ts",
+      "import": "./dist/components/motion/bounce-sidebar.js",
+      "default": "./src/components/motion/bounce-sidebar.tsx"
+    },
+    "./bouncy-accordion": {
+      "source": "./src/components/motion/bouncy-accordion.tsx",
+      "types": "./dist/components/motion/bouncy-accordion.d.ts",
+      "import": "./dist/components/motion/bouncy-accordion.js",
+      "default": "./src/components/motion/bouncy-accordion.tsx"
+    },
+    "./breadcrumb": {
+      "source": "./src/components/motion/breadcrumb.tsx",
+      "types": "./dist/components/motion/breadcrumb.d.ts",
+      "import": "./dist/components/motion/breadcrumb.js",
+      "default": "./src/components/motion/breadcrumb.tsx"
+    },
+    "./bump-chart": {
+      "source": "./src/components/charts/bump-chart.tsx",
+      "types": "./dist/components/charts/bump-chart.d.ts",
+      "import": "./dist/components/charts/bump-chart.js",
+      "default": "./src/components/charts/bump-chart.tsx"
+    },
+    "./button": {
+      "source": "./src/components/motion/button/index.tsx",
+      "types": "./dist/components/motion/button/index.d.ts",
+      "import": "./dist/components/motion/button/index.js",
+      "default": "./src/components/motion/button/index.tsx"
+    },
+    "./button-base": {
+      "source": "./src/components/motion/button/index.tsx",
+      "types": "./dist/components/motion/button/index.d.ts",
+      "import": "./dist/components/motion/button/index.js",
+      "default": "./src/components/motion/button/index.tsx"
+    },
+    "./button-magnetic": {
+      "source": "./src/components/motion/button/index.tsx",
+      "types": "./dist/components/motion/button/index.d.ts",
+      "import": "./dist/components/motion/button/index.js",
+      "default": "./src/components/motion/button/index.tsx"
+    },
+    "./button-metallic": {
+      "source": "./src/components/motion/button/index.tsx",
+      "types": "./dist/components/motion/button/index.d.ts",
+      "import": "./dist/components/motion/button/index.js",
+      "default": "./src/components/motion/button/index.tsx"
+    },
+    "./button-stateful": {
+      "source": "./src/components/motion/button/index.tsx",
+      "types": "./dist/components/motion/button/index.d.ts",
+      "import": "./dist/components/motion/button/index.js",
+      "default": "./src/components/motion/button/index.tsx"
+    },
+    "./candlestick-chart": {
+      "source": "./src/components/charts/candlestick-chart.tsx",
+      "types": "./dist/components/charts/candlestick-chart.d.ts",
+      "import": "./dist/components/charts/candlestick-chart.js",
+      "default": "./src/components/charts/candlestick-chart.tsx"
+    },
+    "./card": {
+      "source": "./src/components/motion/card.tsx",
+      "types": "./dist/components/motion/card.d.ts",
+      "import": "./dist/components/motion/card.js",
+      "default": "./src/components/motion/card.tsx"
+    },
+    "./card-folder": {
+      "source": "./src/components/motion/card-folder.tsx",
+      "types": "./dist/components/motion/card-folder.d.ts",
+      "import": "./dist/components/motion/card-folder.js",
+      "default": "./src/components/motion/card-folder.tsx"
+    },
+    "./center-morph-modal": {
+      "source": "./src/components/motion/center-morph-modal.tsx",
+      "types": "./dist/components/motion/center-morph-modal.d.ts",
+      "import": "./dist/components/motion/center-morph-modal.js",
+      "default": "./src/components/motion/center-morph-modal.tsx"
+    },
+    "./chat-app": {
+      "source": "./src/components/agents/chat-app.tsx",
+      "types": "./dist/components/agents/chat-app.d.ts",
+      "import": "./dist/components/agents/chat-app.js",
+      "default": "./src/components/agents/chat-app.tsx"
+    },
+    "./checkbox": {
+      "source": "./src/components/motion/checkbox.tsx",
+      "types": "./dist/components/motion/checkbox.d.ts",
+      "import": "./dist/components/motion/checkbox.js",
+      "default": "./src/components/motion/checkbox.tsx"
+    },
+    "./chromatic-text-reveal": {
+      "source": "./src/components/motion/chromatic-text-reveal.tsx",
+      "types": "./dist/components/motion/chromatic-text-reveal.d.ts",
+      "import": "./dist/components/motion/chromatic-text-reveal.js",
+      "default": "./src/components/motion/chromatic-text-reveal.tsx"
+    },
+    "./citations": {
+      "source": "./src/components/agents/citations.tsx",
+      "types": "./dist/components/agents/citations.d.ts",
+      "import": "./dist/components/agents/citations.js",
+      "default": "./src/components/agents/citations.tsx"
+    },
+    "./code-block": {
+      "source": "./src/components/agents/code-block.tsx",
+      "types": "./dist/components/agents/code-block.d.ts",
+      "import": "./dist/components/agents/code-block.js",
+      "default": "./src/components/agents/code-block.tsx"
+    },
+    "./collapsible": {
+      "source": "./src/components/motion/collapsible.tsx",
+      "types": "./dist/components/motion/collapsible.d.ts",
+      "import": "./dist/components/motion/collapsible.js",
+      "default": "./src/components/motion/collapsible.tsx"
+    },
+    "./color-picker": {
+      "source": "./src/components/motion/color-picker.tsx",
+      "types": "./dist/components/motion/color-picker.d.ts",
+      "import": "./dist/components/motion/color-picker.js",
+      "default": "./src/components/motion/color-picker.tsx"
+    },
+    "./color-selector": {
+      "source": "./src/components/motion/color-selector.tsx",
+      "types": "./dist/components/motion/color-selector.d.ts",
+      "import": "./dist/components/motion/color-selector.js",
+      "default": "./src/components/motion/color-selector.tsx"
+    },
+    "./combobox": {
+      "source": "./src/components/motion/combobox.tsx",
+      "types": "./dist/components/motion/combobox.d.ts",
+      "import": "./dist/components/motion/combobox.js",
+      "default": "./src/components/motion/combobox.tsx"
+    },
+    "./command-palette": {
+      "source": "./src/components/motion/command-palette.tsx",
+      "types": "./dist/components/motion/command-palette.d.ts",
+      "import": "./dist/components/motion/command-palette.js",
+      "default": "./src/components/motion/command-palette.tsx"
+    },
+    "./components/*": {
+      "source": "./src/components/*",
+      "types": "./dist/components/*.d.ts",
+      "import": "./dist/components/*.js",
+      "default": "./src/components/*"
+    },
+    "./composition-chart": {
+      "source": "./src/components/charts/composition-chart.tsx",
+      "types": "./dist/components/charts/composition-chart.d.ts",
+      "import": "./dist/components/charts/composition-chart.js",
+      "default": "./src/components/charts/composition-chart.tsx"
+    },
+    "./context-menu": {
+      "source": "./src/components/motion/context-menu.tsx",
+      "types": "./dist/components/motion/context-menu.d.ts",
+      "import": "./dist/components/motion/context-menu.js",
+      "default": "./src/components/motion/context-menu.tsx"
+    },
+    "./cylinder-carousel": {
+      "source": "./src/components/motion/cylinder-carousel.tsx",
+      "types": "./dist/components/motion/cylinder-carousel.d.ts",
+      "import": "./dist/components/motion/cylinder-carousel.js",
+      "default": "./src/components/motion/cylinder-carousel.tsx"
+    },
+    "./date-range-picker": {
+      "source": "./src/components/motion/date-range-picker.tsx",
+      "types": "./dist/components/motion/date-range-picker.d.ts",
+      "import": "./dist/components/motion/date-range-picker.js",
+      "default": "./src/components/motion/date-range-picker.tsx"
+    },
+    "./digit-swap": {
+      "source": "./src/components/motion/digit-swap.tsx",
+      "types": "./dist/components/motion/digit-swap.d.ts",
+      "import": "./dist/components/motion/digit-swap.js",
+      "default": "./src/components/motion/digit-swap.tsx"
+    },
+    "./dock": {
+      "source": "./src/components/motion/dock.tsx",
+      "types": "./dist/components/motion/dock.d.ts",
+      "import": "./dist/components/motion/dock.js",
+      "default": "./src/components/motion/dock.tsx"
+    },
+    "./donut-chart": {
+      "source": "./src/components/charts/donut-chart.tsx",
+      "types": "./dist/components/charts/donut-chart.d.ts",
+      "import": "./dist/components/charts/donut-chart.js",
+      "default": "./src/components/charts/donut-chart.tsx"
+    },
+    "./drawer": {
+      "source": "./src/components/motion/drawer.tsx",
+      "types": "./dist/components/motion/drawer.d.ts",
+      "import": "./dist/components/motion/drawer.js",
+      "default": "./src/components/motion/drawer.tsx"
+    },
+    "./dynamic-island": {
+      "source": "./src/components/motion/dynamic-island.tsx",
+      "types": "./dist/components/motion/dynamic-island.d.ts",
+      "import": "./dist/components/motion/dynamic-island.js",
+      "default": "./src/components/motion/dynamic-island.tsx"
+    },
+    "./expandable-action-bar": {
+      "source": "./src/components/motion/expandable-action-bar.tsx",
+      "types": "./dist/components/motion/expandable-action-bar.d.ts",
+      "import": "./dist/components/motion/expandable-action-bar.js",
+      "default": "./src/components/motion/expandable-action-bar.tsx"
+    },
+    "./expandable-control": {
+      "source": "./src/components/motion/expandable-control.tsx",
+      "types": "./dist/components/motion/expandable-control.d.ts",
+      "import": "./dist/components/motion/expandable-control.js",
+      "default": "./src/components/motion/expandable-control.tsx"
+    },
+    "./expandable-tabs": {
+      "source": "./src/components/motion/expandable-tabs.tsx",
+      "types": "./dist/components/motion/expandable-tabs.d.ts",
+      "import": "./dist/components/motion/expandable-tabs.js",
+      "default": "./src/components/motion/expandable-tabs.tsx"
+    },
+    "./expanding-arrow-button": {
+      "source": "./src/components/motion/expanding-arrow-button.tsx",
+      "types": "./dist/components/motion/expanding-arrow-button.d.ts",
+      "import": "./dist/components/motion/expanding-arrow-button.js",
+      "default": "./src/components/motion/expanding-arrow-button.tsx"
+    },
+    "./feedback-widget": {
+      "source": "./src/components/motion/feedback-widget.tsx",
+      "types": "./dist/components/motion/feedback-widget.d.ts",
+      "import": "./dist/components/motion/feedback-widget.js",
+      "default": "./src/components/motion/feedback-widget.tsx"
+    },
+    "./file-diff": {
+      "source": "./src/components/agents/file-diff.tsx",
+      "types": "./dist/components/agents/file-diff.d.ts",
+      "import": "./dist/components/agents/file-diff.js",
+      "default": "./src/components/agents/file-diff.tsx"
+    },
+    "./file-tree": {
+      "source": "./src/components/motion/file-tree.tsx",
+      "types": "./dist/components/motion/file-tree.d.ts",
+      "import": "./dist/components/motion/file-tree.js",
+      "default": "./src/components/motion/file-tree.tsx"
+    },
+    "./file-upload": {
+      "source": "./src/components/motion/file-upload.tsx",
+      "types": "./dist/components/motion/file-upload.d.ts",
+      "import": "./dist/components/motion/file-upload.js",
+      "default": "./src/components/motion/file-upload.tsx"
+    },
+    "./funnel-chart": {
+      "source": "./src/components/charts/funnel-chart.tsx",
+      "types": "./dist/components/charts/funnel-chart.d.ts",
+      "import": "./dist/components/charts/funnel-chart.js",
+      "default": "./src/components/charts/funnel-chart.tsx"
+    },
+    "./heat-calendar": {
+      "source": "./src/components/charts/heat-calendar.tsx",
+      "types": "./dist/components/charts/heat-calendar.d.ts",
+      "import": "./dist/components/charts/heat-calendar.js",
+      "default": "./src/components/charts/heat-calendar.tsx"
+    },
+    "./hold-action-button": {
+      "source": "./src/components/motion/hold-action-button.tsx",
+      "types": "./dist/components/motion/hold-action-button.d.ts",
+      "import": "./dist/components/motion/hold-action-button.js",
+      "default": "./src/components/motion/hold-action-button.tsx"
+    },
+    "./image-generation": {
+      "source": "./src/components/agents/image-generation.tsx",
+      "types": "./dist/components/agents/image-generation.d.ts",
+      "import": "./dist/components/agents/image-generation.js",
+      "default": "./src/components/agents/image-generation.tsx"
+    },
+    "./infinite-masonry": {
+      "source": "./src/components/motion/infinite-masonry.tsx",
+      "types": "./dist/components/motion/infinite-masonry.d.ts",
+      "import": "./dist/components/motion/infinite-masonry.js",
+      "default": "./src/components/motion/infinite-masonry.tsx"
+    },
+    "./input": {
+      "source": "./src/components/motion/input.tsx",
+      "types": "./dist/components/motion/input.d.ts",
+      "import": "./dist/components/motion/input.js",
+      "default": "./src/components/motion/input.tsx"
+    },
+    "./knockout-bracket": {
+      "source": "./src/components/motion/knockout-bracket.tsx",
+      "types": "./dist/components/motion/knockout-bracket.d.ts",
+      "import": "./dist/components/motion/knockout-bracket.js",
+      "default": "./src/components/motion/knockout-bracket.tsx"
+    },
+    "./knockout-wheel": {
+      "source": "./src/components/motion/knockout-wheel.tsx",
+      "types": "./dist/components/motion/knockout-wheel.d.ts",
+      "import": "./dist/components/motion/knockout-wheel.js",
+      "default": "./src/components/motion/knockout-wheel.tsx"
+    },
+    "./lib/*": {
+      "source": "./src/lib/*",
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "default": "./src/lib/*"
+    },
+    "./liquidity-heatmap": {
+      "source": "./src/components/charts/liquidity-heatmap.tsx",
+      "types": "./dist/components/charts/liquidity-heatmap.d.ts",
+      "import": "./dist/components/charts/liquidity-heatmap.js",
+      "default": "./src/components/charts/liquidity-heatmap.tsx"
+    },
+    "./loader": {
+      "source": "./src/components/motion/loader.tsx",
+      "types": "./dist/components/motion/loader.d.ts",
+      "import": "./dist/components/motion/loader.js",
+      "default": "./src/components/motion/loader.tsx"
+    },
+    "./marquee": {
+      "source": "./src/components/motion/marquee.tsx",
+      "types": "./dist/components/motion/marquee.d.ts",
+      "import": "./dist/components/motion/marquee.js",
+      "default": "./src/components/motion/marquee.tsx"
+    },
+    "./message": {
+      "source": "./src/components/agents/message.tsx",
+      "types": "./dist/components/agents/message.d.ts",
+      "import": "./dist/components/agents/message.js",
+      "default": "./src/components/agents/message.tsx"
+    },
+    "./message-bubble": {
+      "source": "./src/components/agents/message-bubble.tsx",
+      "types": "./dist/components/agents/message-bubble.d.ts",
+      "import": "./dist/components/agents/message-bubble.js",
+      "default": "./src/components/agents/message-bubble.tsx"
+    },
+    "./message-scroller": {
+      "source": "./src/components/agents/message-scroller.tsx",
+      "types": "./dist/components/agents/message-scroller.d.ts",
+      "import": "./dist/components/agents/message-scroller.js",
+      "default": "./src/components/agents/message-scroller.tsx"
+    },
+    "./morphing-lightbox": {
+      "source": "./src/components/motion/morphing-lightbox.tsx",
+      "types": "./dist/components/motion/morphing-lightbox.d.ts",
+      "import": "./dist/components/motion/morphing-lightbox.js",
+      "default": "./src/components/motion/morphing-lightbox.tsx"
+    },
+    "./morphing-modal": {
+      "source": "./src/components/motion/morphing-modal.tsx",
+      "types": "./dist/components/motion/morphing-modal.d.ts",
+      "import": "./dist/components/motion/morphing-modal.js",
+      "default": "./src/components/motion/morphing-modal.tsx"
+    },
+    "./morphing-search": {
+      "source": "./src/components/motion/morphing-search.tsx",
+      "types": "./dist/components/motion/morphing-search.d.ts",
+      "import": "./dist/components/motion/morphing-search.js",
+      "default": "./src/components/motion/morphing-search.tsx"
+    },
+    "./morphing-search-chips": {
+      "source": "./src/components/motion/morphing-search-chips.tsx",
+      "types": "./dist/components/motion/morphing-search-chips.d.ts",
+      "import": "./dist/components/motion/morphing-search-chips.js",
+      "default": "./src/components/motion/morphing-search-chips.tsx"
+    },
+    "./morphing-tabs": {
+      "source": "./src/components/motion/morphing-tabs.tsx",
+      "types": "./dist/components/motion/morphing-tabs.d.ts",
+      "import": "./dist/components/motion/morphing-tabs.js",
+      "default": "./src/components/motion/morphing-tabs.tsx"
+    },
+    "./multi-select": {
+      "source": "./src/components/motion/multi-select/index.tsx",
+      "types": "./dist/components/motion/multi-select/index.d.ts",
+      "import": "./dist/components/motion/multi-select/index.js",
+      "default": "./src/components/motion/multi-select/index.tsx"
+    },
+    "./not-found-glitch": {
+      "source": "./src/components/motion/not-found/glitch.tsx",
+      "types": "./dist/components/motion/not-found/glitch.d.ts",
+      "import": "./dist/components/motion/not-found/glitch.js",
+      "default": "./src/components/motion/not-found/glitch.tsx"
+    },
+    "./not-found-magnetic": {
+      "source": "./src/components/motion/not-found/magnetic.tsx",
+      "types": "./dist/components/motion/not-found/magnetic.d.ts",
+      "import": "./dist/components/motion/not-found/magnetic.js",
+      "default": "./src/components/motion/not-found/magnetic.tsx"
+    },
+    "./not-found-spotlight": {
+      "source": "./src/components/motion/not-found/spotlight.tsx",
+      "types": "./dist/components/motion/not-found/spotlight.d.ts",
+      "import": "./dist/components/motion/not-found/spotlight.js",
+      "default": "./src/components/motion/not-found/spotlight.tsx"
+    },
+    "./not-found-stacked": {
+      "source": "./src/components/motion/not-found/stacked.tsx",
+      "types": "./dist/components/motion/not-found/stacked.d.ts",
+      "import": "./dist/components/motion/not-found/stacked.js",
+      "default": "./src/components/motion/not-found/stacked.tsx"
+    },
+    "./not-found-terminal": {
+      "source": "./src/components/motion/not-found/terminal.tsx",
+      "types": "./dist/components/motion/not-found/terminal.d.ts",
+      "import": "./dist/components/motion/not-found/terminal.js",
+      "default": "./src/components/motion/not-found/terminal.tsx"
+    },
+    "./notification-stack": {
+      "source": "./src/components/motion/notification-stack.tsx",
+      "types": "./dist/components/motion/notification-stack.d.ts",
+      "import": "./dist/components/motion/notification-stack.js",
+      "default": "./src/components/motion/notification-stack.tsx"
+    },
+    "./number-ticker": {
+      "source": "./src/components/motion/number-ticker.tsx",
+      "types": "./dist/components/motion/number-ticker.d.ts",
+      "import": "./dist/components/motion/number-ticker.js",
+      "default": "./src/components/motion/number-ticker.tsx"
+    },
+    "./order-book": {
+      "source": "./src/components/charts/order-book.tsx",
+      "types": "./dist/components/charts/order-book.d.ts",
+      "import": "./dist/components/charts/order-book.js",
+      "default": "./src/components/charts/order-book.tsx"
+    },
+    "./otp-input": {
+      "source": "./src/components/motion/otp-input.tsx",
+      "types": "./dist/components/motion/otp-input.d.ts",
+      "import": "./dist/components/motion/otp-input.js",
+      "default": "./src/components/motion/otp-input.tsx"
+    },
+    "./overflow-actions": {
+      "source": "./src/components/motion/overflow-actions.tsx",
+      "types": "./dist/components/motion/overflow-actions.d.ts",
+      "import": "./dist/components/motion/overflow-actions.js",
+      "default": "./src/components/motion/overflow-actions.tsx"
+    },
+    "./parallax": {
+      "source": "./src/components/motion/parallax.tsx",
+      "types": "./dist/components/motion/parallax.d.ts",
+      "import": "./dist/components/motion/parallax.js",
+      "default": "./src/components/motion/parallax.tsx"
+    },
+    "./popover": {
+      "source": "./src/components/motion/popover.tsx",
+      "types": "./dist/components/motion/popover.d.ts",
+      "import": "./dist/components/motion/popover.js",
+      "default": "./src/components/motion/popover.tsx"
+    },
+    "./popover-morph": {
+      "source": "./src/components/motion/popover-morph.tsx",
+      "types": "./dist/components/motion/popover-morph.d.ts",
+      "import": "./dist/components/motion/popover-morph.js",
+      "default": "./src/components/motion/popover-morph.tsx"
+    },
+    "./prediction-market": {
+      "source": "./src/components/motion/prediction-market.tsx",
+      "types": "./dist/components/motion/prediction-market.d.ts",
+      "import": "./dist/components/motion/prediction-market.js",
+      "default": "./src/components/motion/prediction-market.tsx"
+    },
+    "./prediction-market-card": {
+      "source": "./src/components/motion/prediction-market-card.tsx",
+      "types": "./dist/components/motion/prediction-market-card.d.ts",
+      "import": "./dist/components/motion/prediction-market-card.js",
+      "default": "./src/components/motion/prediction-market-card.tsx"
+    },
+    "./preview-rail": {
+      "source": "./src/components/motion/preview-rail.tsx",
+      "types": "./dist/components/motion/preview-rail.d.ts",
+      "import": "./dist/components/motion/preview-rail.js",
+      "default": "./src/components/motion/preview-rail.tsx"
+    },
+    "./price-target-fan": {
+      "source": "./src/components/charts/price-target-fan.tsx",
+      "types": "./dist/components/charts/price-target-fan.d.ts",
+      "import": "./dist/components/charts/price-target-fan.js",
+      "default": "./src/components/charts/price-target-fan.tsx"
+    },
+    "./project-folder": {
+      "source": "./src/components/motion/project-folder.tsx",
+      "types": "./dist/components/motion/project-folder.d.ts",
+      "import": "./dist/components/motion/project-folder.js",
+      "default": "./src/components/motion/project-folder.tsx"
+    },
+    "./prompt-input": {
+      "source": "./src/components/agents/prompt-input.tsx",
+      "types": "./dist/components/agents/prompt-input.d.ts",
+      "import": "./dist/components/agents/prompt-input.js",
+      "default": "./src/components/agents/prompt-input.tsx"
+    },
+    "./pull-to-refresh": {
+      "source": "./src/components/motion/pull-to-refresh.tsx",
+      "types": "./dist/components/motion/pull-to-refresh.d.ts",
+      "import": "./dist/components/motion/pull-to-refresh.js",
+      "default": "./src/components/motion/pull-to-refresh.tsx"
+    },
+    "./radio": {
+      "source": "./src/components/motion/radio.tsx",
+      "types": "./dist/components/motion/radio.d.ts",
+      "import": "./dist/components/motion/radio.js",
+      "default": "./src/components/motion/radio.tsx"
+    },
+    "./range-slider": {
+      "source": "./src/components/motion/range-slider.tsx",
+      "types": "./dist/components/motion/range-slider.d.ts",
+      "import": "./dist/components/motion/range-slider.js",
+      "default": "./src/components/motion/range-slider.tsx"
+    },
+    "./range-slider-bubble": {
+      "source": "./src/components/motion/range-slider-bubble.tsx",
+      "types": "./dist/components/motion/range-slider-bubble.d.ts",
+      "import": "./dist/components/motion/range-slider-bubble.js",
+      "default": "./src/components/motion/range-slider-bubble.tsx"
+    },
+    "./range-slider-fluid": {
+      "source": "./src/components/motion/range-slider-fluid.tsx",
+      "types": "./dist/components/motion/range-slider-fluid.d.ts",
+      "import": "./dist/components/motion/range-slider-fluid.js",
+      "default": "./src/components/motion/range-slider-fluid.tsx"
+    },
+    "./range-slider-inline": {
+      "source": "./src/components/motion/range-slider-inline.tsx",
+      "types": "./dist/components/motion/range-slider-inline.d.ts",
+      "import": "./dist/components/motion/range-slider-inline.js",
+      "default": "./src/components/motion/range-slider-inline.tsx"
+    },
+    "./range-slider-ruler": {
+      "source": "./src/components/motion/range-slider-ruler.tsx",
+      "types": "./dist/components/motion/range-slider-ruler.d.ts",
+      "import": "./dist/components/motion/range-slider-ruler.js",
+      "default": "./src/components/motion/range-slider-ruler.tsx"
+    },
+    "./range-slider-wave": {
+      "source": "./src/components/motion/range-slider-wave.tsx",
+      "types": "./dist/components/motion/range-slider-wave.d.ts",
+      "import": "./dist/components/motion/range-slider-wave.js",
+      "default": "./src/components/motion/range-slider-wave.tsx"
+    },
+    "./reasoning-text": {
+      "source": "./src/components/agents/loading-states/reasoning-text.tsx",
+      "types": "./dist/components/agents/loading-states/reasoning-text.d.ts",
+      "import": "./dist/components/agents/loading-states/reasoning-text.js",
+      "default": "./src/components/agents/loading-states/reasoning-text.tsx"
+    },
+    "./returns-calendar": {
+      "source": "./src/components/charts/returns-calendar.tsx",
+      "types": "./dist/components/charts/returns-calendar.d.ts",
+      "import": "./dist/components/charts/returns-calendar.js",
+      "default": "./src/components/charts/returns-calendar.tsx"
+    },
+    "./scroll-progress": {
+      "source": "./src/components/motion/scroll-progress.tsx",
+      "types": "./dist/components/motion/scroll-progress.d.ts",
+      "import": "./dist/components/motion/scroll-progress.js",
+      "default": "./src/components/motion/scroll-progress.tsx"
+    },
+    "./scroll-reveal": {
+      "source": "./src/components/motion/scroll-reveal.tsx",
+      "types": "./dist/components/motion/scroll-reveal.d.ts",
+      "import": "./dist/components/motion/scroll-reveal.js",
+      "default": "./src/components/motion/scroll-reveal.tsx"
+    },
+    "./scroll-to": {
+      "source": "./src/components/motion/scroll-to.tsx",
+      "types": "./dist/components/motion/scroll-to.d.ts",
+      "import": "./dist/components/motion/scroll-to.js",
+      "default": "./src/components/motion/scroll-to.tsx"
+    },
+    "./select": {
+      "source": "./src/components/motion/select.tsx",
+      "types": "./dist/components/motion/select.d.ts",
+      "import": "./dist/components/motion/select.js",
+      "default": "./src/components/motion/select.tsx"
+    },
+    "./select-morph": {
+      "source": "./src/components/motion/select-morph.tsx",
+      "types": "./dist/components/motion/select-morph.d.ts",
+      "import": "./dist/components/motion/select-morph.js",
+      "default": "./src/components/motion/select-morph.tsx"
+    },
+    "./shader-background": {
+      "source": "./src/components/motion/shader-background.tsx",
+      "types": "./dist/components/motion/shader-background.d.ts",
+      "import": "./dist/components/motion/shader-background.js",
+      "default": "./src/components/motion/shader-background.tsx"
+    },
+    "./shared-layout-bg": {
+      "source": "./src/components/motion/shared-layout-bg.tsx",
+      "types": "./dist/components/motion/shared-layout-bg.d.ts",
+      "import": "./dist/components/motion/shared-layout-bg.js",
+      "default": "./src/components/motion/shared-layout-bg.tsx"
+    },
+    "./signup-form": {
+      "source": "./src/components/motion/signup-form.tsx",
+      "types": "./dist/components/motion/signup-form.d.ts",
+      "import": "./dist/components/motion/signup-form.js",
+      "default": "./src/components/motion/signup-form.tsx"
+    },
+    "./slide-action-button": {
+      "source": "./src/components/motion/slide-action-button.tsx",
+      "types": "./dist/components/motion/slide-action-button.d.ts",
+      "import": "./dist/components/motion/slide-action-button.js",
+      "default": "./src/components/motion/slide-action-button.tsx"
+    },
+    "./smooth-scroll": {
+      "source": "./src/components/motion/smooth-scroll.tsx",
+      "types": "./dist/components/motion/smooth-scroll.d.ts",
+      "import": "./dist/components/motion/smooth-scroll.js",
+      "default": "./src/components/motion/smooth-scroll.tsx"
+    },
+    "./sortable-stack": {
+      "source": "./src/components/motion/sortable-stack.tsx",
+      "types": "./dist/components/motion/sortable-stack.d.ts",
+      "import": "./dist/components/motion/sortable-stack.js",
+      "default": "./src/components/motion/sortable-stack.tsx"
+    },
+    "./status-bar": {
+      "source": "./src/components/charts/status-bar.tsx",
+      "types": "./dist/components/charts/status-bar.d.ts",
+      "import": "./dist/components/charts/status-bar.js",
+      "default": "./src/components/charts/status-bar.tsx"
+    },
+    "./streaming-response": {
+      "source": "./src/components/agents/streaming-response.tsx",
+      "types": "./dist/components/agents/streaming-response.d.ts",
+      "import": "./dist/components/agents/streaming-response.js",
+      "default": "./src/components/agents/streaming-response.tsx"
+    },
+    "./swap": {
+      "source": "./src/components/motion/swap.tsx",
+      "types": "./dist/components/motion/swap.d.ts",
+      "import": "./dist/components/motion/swap.js",
+      "default": "./src/components/motion/swap.tsx"
+    },
+    "./swipeable-list": {
+      "source": "./src/components/motion/swipeable-list.tsx",
+      "types": "./dist/components/motion/swipeable-list.d.ts",
+      "import": "./dist/components/motion/swipeable-list.js",
+      "default": "./src/components/motion/swipeable-list.tsx"
+    },
+    "./switch": {
+      "source": "./src/components/motion/switch.tsx",
+      "types": "./dist/components/motion/switch.d.ts",
+      "import": "./dist/components/motion/switch.js",
+      "default": "./src/components/motion/switch.tsx"
+    },
+    "./table": {
+      "source": "./src/components/motion/table/index.tsx",
+      "types": "./dist/components/motion/table/index.d.ts",
+      "import": "./dist/components/motion/table/index.js",
+      "default": "./src/components/motion/table/index.tsx"
+    },
+    "./table-async": {
+      "source": "./src/components/motion/table/index.tsx",
+      "types": "./dist/components/motion/table/index.d.ts",
+      "import": "./dist/components/motion/table/index.js",
+      "default": "./src/components/motion/table/index.tsx"
+    },
+    "./table-editable": {
+      "source": "./src/components/motion/table/index.tsx",
+      "types": "./dist/components/motion/table/index.d.ts",
+      "import": "./dist/components/motion/table/index.js",
+      "default": "./src/components/motion/table/index.tsx"
+    },
+    "./tabs": {
+      "source": "./src/components/motion/tabs.tsx",
+      "types": "./dist/components/motion/tabs.d.ts",
+      "import": "./dist/components/motion/tabs.js",
+      "default": "./src/components/motion/tabs.tsx"
+    },
+    "./text-cascade": {
+      "source": "./src/components/motion/text-cascade.tsx",
+      "types": "./dist/components/motion/text-cascade.d.ts",
+      "import": "./dist/components/motion/text-cascade.js",
+      "default": "./src/components/motion/text-cascade.tsx"
+    },
+    "./text-reveal": {
+      "source": "./src/components/motion/text-reveal.tsx",
+      "types": "./dist/components/motion/text-reveal.d.ts",
+      "import": "./dist/components/motion/text-reveal.js",
+      "default": "./src/components/motion/text-reveal.tsx"
+    },
+    "./text-scramble": {
+      "source": "./src/components/motion/text-scramble.tsx",
+      "types": "./dist/components/motion/text-scramble.d.ts",
+      "import": "./dist/components/motion/text-scramble.js",
+      "default": "./src/components/motion/text-scramble.tsx"
+    },
+    "./text-shimmer": {
+      "source": "./src/components/motion/text-shimmer.tsx",
+      "types": "./dist/components/motion/text-shimmer.d.ts",
+      "import": "./dist/components/motion/text-shimmer.js",
+      "default": "./src/components/motion/text-shimmer.tsx"
+    },
+    "./theme-toggle": {
+      "source": "./src/components/motion/theme-toggle.tsx",
+      "types": "./dist/components/motion/theme-toggle.d.ts",
+      "import": "./dist/components/motion/theme-toggle.js",
+      "default": "./src/components/motion/theme-toggle.tsx"
+    },
+    "./thinking-shimmer": {
+      "source": "./src/components/agents/loading-states/thinking-shimmer.tsx",
+      "types": "./dist/components/agents/loading-states/thinking-shimmer.d.ts",
+      "import": "./dist/components/agents/loading-states/thinking-shimmer.js",
+      "default": "./src/components/agents/loading-states/thinking-shimmer.tsx"
+    },
+    "./tilt-card": {
+      "source": "./src/components/motion/tilt-card.tsx",
+      "types": "./dist/components/motion/tilt-card.d.ts",
+      "import": "./dist/components/motion/tilt-card.js",
+      "default": "./src/components/motion/tilt-card.tsx"
+    },
+    "./todo-list": {
+      "source": "./src/components/agents/todo-list.tsx",
+      "types": "./dist/components/agents/todo-list.d.ts",
+      "import": "./dist/components/agents/todo-list.js",
+      "default": "./src/components/agents/todo-list.tsx"
+    },
+    "./tool-approval": {
+      "source": "./src/components/agents/tool-approval.tsx",
+      "types": "./dist/components/agents/tool-approval.d.ts",
+      "import": "./dist/components/agents/tool-approval.js",
+      "default": "./src/components/agents/tool-approval.tsx"
+    },
+    "./tool-result": {
+      "source": "./src/components/agents/tool-result.tsx",
+      "types": "./dist/components/agents/tool-result.d.ts",
+      "import": "./dist/components/agents/tool-result.js",
+      "default": "./src/components/agents/tool-result.tsx"
+    },
+    "./tooltip": {
+      "source": "./src/components/motion/tooltip.tsx",
+      "types": "./dist/components/motion/tooltip.d.ts",
+      "import": "./dist/components/motion/tooltip.js",
+      "default": "./src/components/motion/tooltip.tsx"
+    },
+    "./treemap": {
+      "source": "./src/components/charts/treemap.tsx",
+      "types": "./dist/components/charts/treemap.d.ts",
+      "import": "./dist/components/charts/treemap.js",
+      "default": "./src/components/charts/treemap.tsx"
+    },
+    "./voice-orb": {
+      "source": "./src/components/agents/voice-orb.tsx",
+      "types": "./dist/components/agents/voice-orb.d.ts",
+      "import": "./dist/components/agents/voice-orb.js",
+      "default": "./src/components/agents/voice-orb.tsx"
+    },
+    "./volume-profile": {
+      "source": "./src/components/charts/volume-profile.tsx",
+      "types": "./dist/components/charts/volume-profile.d.ts",
+      "import": "./dist/components/charts/volume-profile.js",
+      "default": "./src/components/charts/volume-profile.tsx"
+    },
+    "./wallet-card": {
+      "source": "./src/components/motion/wallet-card/index.tsx",
+      "types": "./dist/components/motion/wallet-card/index.d.ts",
+      "import": "./dist/components/motion/wallet-card/index.js",
+      "default": "./src/components/motion/wallet-card/index.tsx"
+    },
+    "./wheel-picker": {
+      "source": "./src/components/motion/wheel-picker.tsx",
+      "types": "./dist/components/motion/wheel-picker.d.ts",
+      "import": "./dist/components/motion/wheel-picker.js",
+      "default": "./src/components/motion/wheel-picker.tsx"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "sync:beui": "node scripts/sync-beui.mjs src .beui-manifest.json && node scripts/build-beui-exports.mjs . .beui-manifest.json && node scripts/splice-exports.mjs package.json exports.json && node scripts/apply-beui-patches.mjs src"
+  },
+  "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
+    "@paper-design/shaders-react": "^0.0.81",
+    "@tanstack/react-virtual": "^3.14.21",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lenis": "^1.3.27",
+    "lucide-react": "^1.34.0",
+    "motion": "^13.1.1",
+    "next-themes": "^0.4.6",
+    "shiki": "^4.5.0",
+    "tailwind-merge": "^3.6.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^5.7.0"
+  }
+}
