@@ -18,6 +18,22 @@ export class SkipThrottlerGuard extends ThrottlerGuard {
     ) {
       return true;
     }
+
+    // The 'strict' throttler profile (auth-hardening design D3) is intended ONLY
+    // for credential/auth routes that explicitly declare @Throttle({ strict: ... }).
+    // Undecorated routes must not inherit the strict 5-request limit.
+    if (requestProps.throttler.name === 'strict') {
+      const handler = requestProps.context.getHandler();
+      const classRef = requestProps.context.getClass();
+      const hasStrict = this.reflector.getAllAndOverride('THROTTLER:LIMITstrict', [
+        handler,
+        classRef,
+      ]);
+      if (hasStrict === undefined) {
+        return true;
+      }
+    }
+
     return super.handleRequest(requestProps);
   }
 }
