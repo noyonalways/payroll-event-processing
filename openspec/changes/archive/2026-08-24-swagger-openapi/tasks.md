@@ -41,6 +41,6 @@
 ## 7. Manual verification
 
 - [x] 7.1 Boot the stack (`docker compose up --build` for api + postgres + redis) or `npm run dev` with local Postgres/Redis
-- [x] 7.2 `curl http://localhost:3000/api-docs` → 200 HTML; `curl http://localhost:3000/api-docs-json` → 200 JSON containing `paths./events`, `paths./health`, and the component schemas
+- [x] 7.2 `curl http://localhost:4000/api-docs` → 200 HTML; `curl http://localhost:4000/api-docs-json` → 200 JSON containing `paths./events`, `paths./health`, and the component schemas
 - [x] 7.3 Swagger UI "Try it out" on POST /events with the BANK_ACCOUNT_CHANGE example + an Idempotency-Key → 201 `{ id, status: 'received' }`
 - [x] 7.4 Repeat the exact same request (same key) → identical 201 body, no second row persisted

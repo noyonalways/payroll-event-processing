@@ -34,8 +34,8 @@ export interface InputProps extends Omit<
   "value" | "defaultValue" | "onChange"
 > {
   label?: string;
-  value?: string;
-  defaultValue?: string;
+  value?: string | number;
+  defaultValue?: string | number;
   onChange?: (value: string) => void;
   /** Truthy error triggers a shake, red border and (if a string) a message. */
   error?: string | boolean;
@@ -85,8 +85,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const hasError = Boolean(error);
   const errorMessage = typeof error === "string" ? error : null;
 
+  const isDateOrTime = type === "date" || type === "time" || type === "datetime-local";
+
   // Right edge shows the success check, otherwise the caller's right icon.
-  const rightSlot = success ? null : rightIcon;
+  const rightSlot = (success && !isDateOrTime) ? null : rightIcon;
 
   // Shake the field when an error appears.
   useEffect(() => {
@@ -103,15 +105,17 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     onChange?.(next);
   };
 
+  const hasLabel = Boolean(label && label.trim().length > 0);
+
   return (
     <div
       className={cn("flex flex-col gap-1.5", className, classNames?.root)}
     >
-      {label ? (
+      {hasLabel ? (
         <label
           htmlFor={id}
           className={cn(
-            "px-1 text-sm font-medium text-foreground",
+            "px-0.5 text-sm font-medium text-foreground",
             classNames?.label,
           )}
         >
@@ -131,18 +135,18 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
                 : "idle"
         }
         className={cn(
-          "relative h-11 overflow-hidden rounded-full border transition-colors duration-200",
+          "relative h-10 overflow-hidden rounded-xl border bg-background text-foreground transition-colors duration-200",
           "border-border",
-          focused && !hasError && "border-foreground/40 ring-2 ring-ring/40",
+          focused && !hasError && "border-primary ring-2 ring-primary/20",
           hasError && "border-destructive ring-2 ring-destructive/25",
-          disabled && "opacity-60",
+          disabled && "opacity-60 cursor-not-allowed",
           classNames?.field,
         )}
       >
         {leftIcon ? (
           <span
             className={cn(
-              "pointer-events-none absolute left-3 top-1/2 flex -translate-y-1/2 items-center text-muted-foreground [&_svg]:h-4 [&_svg]:w-4",
+              "pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted-foreground [&_svg]:h-4 [&_svg]:w-4",
               classNames?.leftIcon,
             )}
           >
@@ -169,39 +173,43 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             onBlur?.(event);
           }}
           className={cn(
-            "peer h-full w-full bg-transparent text-base leading-6 text-foreground caret-foreground outline-none",
-            "placeholder:text-muted-foreground/60",
-            leftIcon ? "pl-10" : "pl-3.5",
-            rightSlot || success ? "pr-10" : "pr-3.5",
+            "peer h-full w-full bg-transparent text-sm text-foreground caret-primary outline-none focus:outline-none",
+            "placeholder:text-muted-foreground/50",
+            leftIcon ? "pl-9" : "pl-3.5",
+            (rightSlot || (success && !isDateOrTime)) ? "pr-9" : "pr-3.5",
             disabled && "cursor-not-allowed",
             classNames?.input,
           )}
         />
 
-        {success ? (
-          <motion.svg
-            viewBox="0 0 24 24"
-            fill="none"
+        {success && !isDateOrTime ? (
+          <span
             className={cn(
-              "absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-(--color-success)",
+              "pointer-events-none absolute inset-y-0 right-3 flex items-center text-emerald-500",
               classNames?.successIcon,
             )}
           >
-            <motion.path
-              d="M5 12.5l4.5 4.5L19 7.5"
-              stroke="currentColor"
-              strokeWidth={2.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              initial={reduce ? { pathLength: 1 } : { pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={{ duration: 0.35, ease: "easeOut" }}
-            />
-          </motion.svg>
+            <motion.svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-4 w-4"
+            >
+              <motion.path
+                d="M5 12.5l4.5 4.5L19 7.5"
+                stroke="currentColor"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={reduce ? { pathLength: 1 } : { pathLength: 0 }}
+                animate={{ pathLength: 1 }}
+                transition={{ duration: 0.35, ease: "easeOut" }}
+              />
+            </motion.svg>
+          </span>
         ) : rightSlot ? (
           <span
             className={cn(
-              "absolute right-0 top-0 flex h-full items-center text-muted-foreground [&_button]:grid [&_button]:size-11 [&_button]:place-items-center [&_svg]:h-4 [&_svg]:w-4",
+              "absolute inset-y-0 right-0 flex items-center text-muted-foreground [&_button]:grid [&_button]:size-10 [&_button]:place-items-center [&_svg]:h-4 [&_svg]:w-4",
               classNames?.rightIcon,
             )}
           >

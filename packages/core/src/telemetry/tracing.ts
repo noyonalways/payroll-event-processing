@@ -70,6 +70,7 @@ export function traceContextForJob(): Record<string, string> | null {
 }
 
 function traceApi(): typeof import('@opentelemetry/api') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('@opentelemetry/api') as typeof import('@opentelemetry/api');
 }
 

@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Filter,
   ListFilter,
+  ClipboardList,
 } from 'lucide-react';
 
 import {
@@ -183,8 +184,12 @@ export function RequestsView({ refreshKey }: { refreshKey: number }) {
   return (
     <section className="space-y-6" data-testid="requests-view">
       {/* Page header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
+          <div className="flex items-center gap-2 mb-2">
+            <ClipboardList size={14} className="text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary">Change Requests</span>
+          </div>
           <h1 className="text-2xl font-bold tracking-tight">Change requests</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Every request your team made — newest first.
@@ -237,7 +242,7 @@ export function RequestsView({ refreshKey }: { refreshKey: number }) {
         <div className="flex flex-wrap items-center gap-2">
           <Filter size={14} className="text-muted-foreground" />
           <select
-            className="h-8 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+            className="h-10 rounded-xl border border-border bg-card px-3 text-xs text-foreground outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as EventType | 'all')}
             data-testid="requests-type-filter"

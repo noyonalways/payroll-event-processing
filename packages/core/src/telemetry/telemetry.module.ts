@@ -4,7 +4,6 @@ import {
   ExecutionContext,
   Get,
   Global,
-  HttpException,
   Injectable,
   Module,
   NestInterceptor,

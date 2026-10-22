@@ -1,4 +1,4 @@
-require('./setup-throttle');
+import './setup-throttle';
 
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';

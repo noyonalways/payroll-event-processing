@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsIn,
   IsNotEmpty,
-  IsOptional,
   IsString,
   MinLength,
   ValidateIf,

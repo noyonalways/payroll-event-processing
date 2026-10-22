@@ -113,6 +113,10 @@ export function ProviderConfigView() {
     <section className="mx-auto max-w-2xl space-y-8" data-testid="provider-view">
       {/* Page header */}
       <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Plug size={14} className="text-primary" />
+          <span className="text-xs font-semibold uppercase tracking-wider text-primary">Provider Config</span>
+        </div>
         <h1 className="text-2xl font-bold tracking-tight">Payroll provider</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Where processed payroll changes are executed. Changes apply to the very next event —

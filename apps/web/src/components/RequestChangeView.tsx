@@ -81,6 +81,7 @@ const FIELD_LABELS: Record<string, { label: string; placeholder?: string }> = {
   postalCode: { label: 'Postal code', placeholder: '10115' },
   country: { label: 'Country (ISO code)', placeholder: 'DE' },
   department: { label: 'New department', placeholder: 'Engineering' },
+  newDepartment: { label: 'New department', placeholder: 'Engineering' },
 };
 
 const STEP_TITLES = ['Select person', 'Change type', 'Details', 'Review & submit'] as const;
@@ -226,7 +227,7 @@ export function RequestChangeView({
         ? ['iban', 'effectiveDate']
         : kind === 'ADDRESS_CHANGE'
           ? ['street', 'city', 'postalCode', 'country', 'effectiveDate']
-          : ['department', 'effectiveDate'];
+          : ['newDepartment', 'effectiveDate'];
 
   return (
     <section className="mx-auto max-w-2xl space-y-8" data-testid="request-change-view">
@@ -399,21 +400,16 @@ export function RequestChangeView({
           {fieldsForKind.map((field) => (
             <div key={field}>
               {field === 'effectiveDate' ? (
-                <div className="flex flex-col gap-1.5">
-                  <label className="flex items-center gap-2 px-1 text-sm font-medium">
-                    <Calendar size={14} className="text-muted-foreground" />
-                    Effective date
-                  </label>
-                  <input
-                    type="date"
-                    className="flex h-11 w-full rounded-full border border-border bg-transparent px-4 py-1 text-sm outline-none transition-colors focus:border-foreground/40 focus:ring-2 focus:ring-ring/40"
-                    data-testid="wizard-effective-date"
-                    value={values.effectiveDate ?? ''}
-                    onChange={(e) =>
-                      setValues((prev) => ({ ...prev, effectiveDate: e.target.value }))
-                    }
-                  />
-                </div>
+                <Input
+                  label="Effective date"
+                  type="date"
+                  value={values.effectiveDate ?? ''}
+                  onChange={(next) =>
+                    setValues((prev) => ({ ...prev, effectiveDate: next }))
+                  }
+                  leftIcon={<Calendar size={15} />}
+                  data-testid="wizard-effective-date"
+                />
               ) : field === 'newSalary' ? (
                 <Input
                   label={FIELD_LABELS[field].label}

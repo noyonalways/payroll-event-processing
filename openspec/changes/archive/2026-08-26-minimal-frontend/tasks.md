@@ -3,7 +3,7 @@
 - [x] 1.1 Scaffold the `frontend/` app from the official create-vite React-TS template (`npm create vite@latest frontend -- --template react-ts`, trimmed to the files listed in design D1). Verify with `npm --prefix frontend install` and `npm --prefix frontend run build`.
 - [x] 1.2 Add test + styling dev dependencies to `frontend/package.json` — Vitest + Testing Library (`vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`) and Tailwind CSS v4 (`tailwindcss`, `@tailwindcss/vite`) + Base UI (`@base-ui-components/react`); add `frontend/vitest.config.ts` (jsdom, `setupFiles: src/test/setup.ts`), plug `@tailwindcss/vite` into `frontend/vite.config.ts`, and add `frontend/src/test/setup.ts`; add `test` and `test:run` scripts. Verify `npm --prefix frontend run test` runs a smoke spec.
 - [x] 1.3 Add root `package.json` convenience scripts `dev:frontend`, `build:frontend`, `test:frontend` via `npm --prefix frontend run …`.
-- [x] 1.4 Add `frontend/.env.example` documenting `VITE_API_URL` (default `http://localhost:3000`) with a comment.
+- [x] 1.4 Add `frontend/.env.example` documenting `VITE_API_URL` (default `http://localhost:4000`) with a comment.
 
 ## 2. API client and types (consumes existing endpoints)
 
@@ -37,8 +37,8 @@
 
 ## 7. Containerization (replaces placeholder)
 
-- [x] 7.1 Add `docker/Dockerfile.frontend` (multi-stage: `node:20-alpine` build with `ARG VITE_API_URL` default `http://localhost:3000` → `nginx:alpine`) and `docker/nginx.conf` (`try_files $uri $uri/ /index.html;`).
-- [x] 7.2 Update `docker-compose.yml` `frontend` service to `build: { context: ., dockerfile: docker/Dockerfile.frontend, args: { VITE_API_URL: ${VITE_API_URL:-http://localhost:3000} } }`, remove the placeholder volume mounts, keep port `5173:80`, add `depends_on: api: service_healthy`.
+- [x] 7.1 Add `docker/Dockerfile.frontend` (multi-stage: `node:20-alpine` build with `ARG VITE_API_URL` default `http://localhost:4000` → `nginx:alpine`) and `docker/nginx.conf` (`try_files $uri $uri/ /index.html;`).
+- [x] 7.2 Update `docker-compose.yml` `frontend` service to `build: { context: ., dockerfile: docker/Dockerfile.frontend, args: { VITE_API_URL: ${VITE_API_URL:-http://localhost:4000} } }`, remove the placeholder volume mounts, keep port `5173:80`, add `depends_on: api: service_healthy`.
 - [x] 7.3 Remove `docker/nginx-placeholder.conf`, `docker/placeholder-index.html`, and `frontend/.gitkeep`.
 - [x] 7.4 Build and boot the full stack (`docker compose build frontend`, then `docker compose up --build`); smoke-check that `http://localhost:5173` serves the app and a submission from it reaches the API (spec scenario "Docker compose serves the real UI").
 

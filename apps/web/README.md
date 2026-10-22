@@ -42,7 +42,7 @@ re-fills, so repeated submits keep demonstrating the same case.
 ## Run it
 
 ```bash
-# Dev (Vite dev server, expects the API on http://localhost:3000)
+# Dev (Vite dev server, expects the API on http://localhost:4000)
 npm --prefix frontend run dev
 
 # API origin can be overridden at build time

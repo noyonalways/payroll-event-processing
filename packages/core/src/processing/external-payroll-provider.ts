@@ -1,4 +1,3 @@
-import { HandlerInput } from '@repo/shared';
 
 /**
  * The external payroll operation one handler dispatches to

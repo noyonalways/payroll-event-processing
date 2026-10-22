@@ -44,7 +44,7 @@ A single-page app in `frontend/` scaffolded from the official React-TS template 
 **Files modified:** root `package.json` (scripts only). `frontend/package-lock.json` generated. Root `.gitignore` already ignores `node_modules/` and `dist/` at any depth.
 
 ### D3 — API integration: direct CORS fetch to `VITE_API_URL`, no proxy
-A typed client module calls the API directly from the browser. Base URL comes from `import.meta.env.VITE_API_URL`, defaulting to `http://localhost:3000` in `frontend/.env.example` and via build-time `ARG VITE_API_URL` in the Dockerfile. CORS is already enabled globally on the API, so no proxy is needed in either dev mode (Vite :5173) or the container (nginx :5173 → API published on host :3000).
+A typed client module calls the API directly from the browser. Base URL comes from `import.meta.env.VITE_API_URL`, defaulting to `http://localhost:4000` in `frontend/.env.example` and via build-time `ARG VITE_API_URL` in the Dockerfile. CORS is already enabled globally on the API, so no proxy is needed in either dev mode (Vite :5173) or the container (nginx :5173 → API published on host :3000).
 
 - **Alternatives**: nginx reverse proxy (`/api` → `api:3000`) in the frontend container. Rejected: the API has no `/api` path prefix, so the proxy needs a rewrite rule; a direct fetch with an existing CORS-enabled API is simpler, transparent, and already works for the dev server. Bake-vs-runtime trade-off noted in Risks.
 - **Reliability concept**: idempotency (#2) is exercised at the client boundary — the client always sends a fresh UUID `Idempotency-Key` on new submissions.
@@ -102,7 +102,7 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG VITE_API_URL=http://localhost:3000
+ARG VITE_API_URL=http://localhost:4000
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
@@ -119,7 +119,7 @@ frontend:
     context: .
     dockerfile: docker/Dockerfile.frontend
     args:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
   container_name: payroll_frontend
   restart: unless-stopped
   ports: ["5173:80"]
@@ -139,7 +139,7 @@ Remove: the placeholder volume mounts, `docker/nginx-placeholder.conf`, `docker/
 
 ## Risks / Trade-offs
 
-- [Vite bake-time `VITE_API_URL`] → rebuild needed to point at a different API origin. Mitigation: a sensible default (`http://localhost:3000`), documented `frontend/.env.example`, and compose `ARG` so deployments can override without editing code.
+- [Vite bake-time `VITE_API_URL`] → rebuild needed to point at a different API origin. Mitigation: a sensible default (`http://localhost:4000`), documented `frontend/.env.example`, and compose `ARG` so deployments can override without editing code.
 - [Polling load] → every non-terminal event is polled every 3 s. Mitigation: `allSettled` concurrency, polling stops at terminal states, and the list is browser-local so scale stays tiny; interval is a single named constant for easy tuning.
 - [`localStorage` drift after DB reset] → tracked ids may 404. Mitigation: 404 marks the row `unavailable` (per spec scenario) rather than poisoning the list; a "Clear list" action exists.
 - [No backend list endpoint] → events submitted elsewhere are invisible. Mitigation: accepted, explicitly scoped (roadmap #8 owns `GET /events`); detail panel still shows any id the user navigates to (future hook point).

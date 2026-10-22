@@ -60,7 +60,7 @@ describe('Prometheus metrics surface (e2e)', () => {
   const submit = async () => {
     // The reserved `EMP-DEMO-SUCCESS` id is deterministic ALWAYS (it overrides
     // PAYROLL_FAILURE_MODE) — the bounded suite needs that, not findFirst.
-    const employee = await prisma.employee.findFirstOrThrow({
+    await prisma.employee.findFirstOrThrow({
       where: {
         organizationId: tenant.organizationId,
         active: true,

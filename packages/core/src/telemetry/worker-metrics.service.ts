@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
-import type { Server } from 'http';
+import { createServer, type Server } from 'node:http';
 import { PrismaService } from '@repo/database';
 import { PAYROLL_EVENTS_QUEUE } from '@repo/shared';
 import { MetricsService } from './metrics.service';
@@ -60,9 +60,7 @@ export class WorkerMetricsService implements OnModuleInit, OnModuleDestroy {
 
   /** The exposition surface — scrapeable from the host network. */
   private startListener(): void {
-    // node:http keeps the worker free of an HTTP framework dependency.
-    const http = require('http') as typeof import('http');
-    this.server = http.createServer(
+    this.server = createServer(
       async (_req, res) => {
         try {
           res.statusCode = 200;

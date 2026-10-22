@@ -5,6 +5,7 @@ import {
   Plus,
   X,
   User,
+  Users,
   CheckCircle2,
   Clock,
   AlertTriangle,
@@ -205,8 +206,12 @@ export function PeopleView({
   return (
     <section className="space-y-6" data-testid="people-view">
       {/* Page header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Users size={14} className="text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary">People</span>
+          </div>
           <h1 className="text-2xl font-bold tracking-tight">People</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Your roster — and each person's current pay details at a glance.
@@ -219,7 +224,7 @@ export function PeopleView({
           data-testid="people-add-toggle"
           className="gap-2"
         >
-          {adding ? <><X size={14} /> Cancel</> : <><Plus size={14} /> Add person</>}
+          {adding ? <><X size={14} />Cancel</> : <><Plus size={14} />Add person</>}
         </Button>
       </div>
 
@@ -302,7 +307,6 @@ export function PeopleView({
           {/* Employee list */}
           <div className="space-y-3">
             <Input
-              label="Search"
               value={search}
               onChange={setSearch}
               placeholder="Search by name, number, or department…"

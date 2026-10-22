@@ -111,6 +111,10 @@ export function MembersView() {
     <section className="space-y-8" data-testid="members-view">
       {/* Page header */}
       <div>
+        <div className="flex items-center gap-2 mb-2">
+          <UserPlus size={14} className="text-primary" />
+          <span className="text-xs font-semibold uppercase tracking-wider text-primary">Members</span>
+        </div>
         <h1 className="text-2xl font-bold tracking-tight">Members</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Everyone with access to this organization.{' '}
@@ -151,7 +155,7 @@ export function MembersView() {
                 Role
               </label>
               <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as 'ADMIN' | 'MEMBER')}>
-                <SelectTrigger className="w-32" data-testid="invite-role">
+                <SelectTrigger className="h-10 w-32" data-testid="invite-role">
                   <SelectValue placeholder="Role" />
                 </SelectTrigger>
                 <SelectContent>
@@ -165,7 +169,7 @@ export function MembersView() {
               size="sm"
               disabled={!formFilled || busy || inviting}
               data-testid="invite-submit"
-              className="gap-2"
+              className="h-10 gap-2"
             >
               <UserPlus size={14} />
               {inviting ? 'Inviting…' : 'Send invite'}

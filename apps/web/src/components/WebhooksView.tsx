@@ -118,6 +118,10 @@ export function WebhooksView() {
     <section className="space-y-8" data-testid="webhooks-view">
       {/* Page header */}
       <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Webhook size={14} className="text-primary" />
+          <span className="text-xs font-semibold uppercase tracking-wider text-primary">Webhooks</span>
+        </div>
         <h1 className="text-2xl font-bold tracking-tight">Webhooks</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Every terminal event outcome is POSTed — HMAC-signed — to your HTTPS endpoints,
@@ -162,7 +166,7 @@ export function WebhooksView() {
               size="sm"
               disabled={!formFilled || busy || creating}
               data-testid="webhook-create"
-              className="gap-2"
+              className="h-10 gap-2"
             >
               <Webhook size={14} />
               {creating ? 'Registering…' : 'Register endpoint'}

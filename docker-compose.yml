@@ -60,7 +60,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -98,7 +98,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         # Bake-time API origin; default matches dev mode (host runs on :3000).
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
     container_name: payroll_frontend
     restart: unless-stopped
     ports:

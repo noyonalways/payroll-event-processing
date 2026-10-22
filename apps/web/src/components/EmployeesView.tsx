@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/motion/select';
+import { Search } from 'lucide-react';
 import { useEmployees } from '../lib/useEmployees';
 import type { Employee } from '../lib/types';
 
@@ -235,13 +236,15 @@ export function EmployeesView() {
             </SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          label=""
-          value={directory.search}
-          onChange={(next) => directory.setSearch(next)}
-          placeholder="Search number or name…"
-          data-testid="employee-search-input"
-        />
+        <div className="flex-1 min-w-[220px]">
+          <Input
+            value={directory.search}
+            onChange={(next) => directory.setSearch(next)}
+            placeholder="Search number or name…"
+            leftIcon={<Search size={15} />}
+            data-testid="employee-search-input"
+          />
+        </div>
       </div>
 
       {directory.loadError && (

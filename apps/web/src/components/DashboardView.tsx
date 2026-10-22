@@ -10,6 +10,7 @@ import {
   TrendingUp,
   ArrowRight,
   ClipboardList,
+  Sparkles,
 } from 'lucide-react';
 
 import {
@@ -95,8 +96,8 @@ export function StatusChip({ status }: { status: EventListItem['status'] }) {
 function SkeletonCard() {
   return (
     <div className="rounded-2xl border border-border bg-card p-6">
-      <div className="skeleton mb-3 h-8 w-8 rounded-full" />
-      <div className="skeleton mb-2 h-8 w-16 rounded-lg" />
+      <div className="skeleton mb-4 h-10 w-10 rounded-xl" />
+      <div className="skeleton mb-2 h-9 w-16 rounded-lg" />
       <div className="skeleton h-4 w-28 rounded" />
     </div>
   );
@@ -106,32 +107,34 @@ interface StatCardProps {
   icon: React.ReactNode;
   value: number;
   label: string;
-  colorClass: string;
-  bgClass: string;
+  gradient: string;
+  iconBg: string;
+  iconColor: string;
   onClick: () => void;
   testId?: string;
 }
 
-function StatCard({ icon, value, label, colorClass, bgClass, onClick, testId }: StatCardProps) {
+function StatCard({ icon, value, label, gradient, iconBg, iconColor, onClick, testId }: StatCardProps) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group relative overflow-hidden rounded-2xl border border-border bg-card p-6 text-left transition-all duration-200 hover:border-primary/30 hover:shadow-md hover:shadow-primary/5"
+      className="stat-card group relative overflow-hidden rounded-2xl border border-border bg-card p-6 text-left hover:border-border/80 hover:shadow-lg"
       data-testid={testId}
     >
-      {/* Background accent */}
-      <div className={`absolute right-0 top-0 h-24 w-24 rounded-full opacity-10 blur-2xl ${bgClass}`} />
+      {/* Background gradient blob */}
+      <div className={`absolute -right-6 -top-6 h-24 w-24 rounded-full opacity-[0.07] blur-2xl ${gradient}`} />
+      <div className={`absolute right-4 top-4 h-12 w-12 rounded-full opacity-[0.05] blur-xl ${gradient}`} />
 
-      <div className={`mb-4 inline-flex items-center justify-center rounded-xl p-2.5 ${bgClass} ${colorClass}`}>
-        {icon}
+      <div className={`mb-4 inline-flex items-center justify-center rounded-xl p-2.5 ${iconBg}`}>
+        <span className={iconColor}>{icon}</span>
       </div>
-      <div className={`text-3xl font-bold tabular-nums tracking-tight ${colorClass}`}>
+      <div className={`text-3xl font-bold tabular-nums tracking-tight ${iconColor}`}>
         <AnimatedNumber value={value} startOnView={false} />
       </div>
-      <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+      <div className="mt-1.5 flex items-center gap-1 text-sm text-muted-foreground">
         {label}
-        <ArrowRight size={13} className="ml-auto opacity-0 transition-opacity group-hover:opacity-60" />
+        <ArrowRight size={12} className="ml-auto opacity-0 transition-opacity group-hover:opacity-50" />
       </div>
     </button>
   );
@@ -188,11 +191,19 @@ export function DashboardView({
 
   return (
     <section className="space-y-8" data-testid="dashboard-view">
-      {/* Page header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      {/* ── Page header ─────────────────────────────────── */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Payroll overview</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles size={14} className="text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+              Dashboard
+            </span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Payroll overview
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground max-w-md">
             Every change your team requested — and where it stands right now.
           </p>
         </div>
@@ -234,8 +245,9 @@ export function DashboardView({
               icon={<CheckCircle2 size={20} />}
               value={applied}
               label="Changes applied"
-              colorClass="text-emerald-700 dark:text-emerald-400"
-              bgClass="bg-emerald-500/15"
+              gradient="bg-emerald-500"
+              iconBg="bg-emerald-500/10"
+              iconColor="text-emerald-600 dark:text-emerald-400"
               onClick={onOpenRequests}
               testId="stat-applied"
             />
@@ -243,16 +255,18 @@ export function DashboardView({
               icon={<Clock size={20} />}
               value={inFlight}
               label="In progress"
-              colorClass="text-amber-700 dark:text-amber-400"
-              bgClass="bg-amber-500/15"
+              gradient="bg-amber-500"
+              iconBg="bg-amber-500/10"
+              iconColor="text-amber-600 dark:text-amber-400"
               onClick={onOpenRequests}
             />
             <StatCard
               icon={<AlertTriangle size={20} />}
               value={failed.length}
               label="Failed — needs attention"
-              colorClass="text-destructive"
-              bgClass="bg-destructive/15"
+              gradient="bg-red-500"
+              iconBg="bg-red-500/10"
+              iconColor="text-destructive"
               onClick={onOpenRequests}
               testId="stat-failed"
             />
@@ -260,21 +274,22 @@ export function DashboardView({
               icon={<Users size={20} />}
               value={activeEmployees}
               label="Active employees"
-              colorClass="text-primary"
-              bgClass="bg-primary/15"
+              gradient="bg-teal-500"
+              iconBg="bg-teal-500/10"
+              iconColor="text-primary"
               onClick={onOpenRequests}
             />
           </div>
 
           {/* Failed requests panel */}
           {failed.length > 0 && (
-            <div className="rounded-2xl border border-destructive/25 bg-destructive/5 p-5">
+            <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-5">
               <div className="mb-4 flex items-center gap-2">
-                <AlertTriangle size={16} className="text-destructive" />
+                <AlertTriangle size={15} className="text-destructive" />
                 <h2 className="text-sm font-semibold text-destructive">
                   Failed requests — action required
                 </h2>
-                <span className="ml-auto rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive">
+                <span className="ml-auto rounded-full bg-destructive/12 px-2.5 py-0.5 text-xs font-semibold text-destructive">
                   {failed.length}
                 </span>
               </div>
@@ -301,7 +316,7 @@ export function DashboardView({
                         data-testid={`dashboard-retry-${e.id}`}
                         className="h-8 gap-1.5"
                       >
-                        <RotateCcw size={13} />
+                        <RotateCcw size={12} />
                         Retry
                       </Button>
                       <Button
@@ -312,7 +327,7 @@ export function DashboardView({
                         onClick={() => void act(e.id, 'cancel')}
                         data-testid={`dashboard-cancel-${e.id}`}
                       >
-                        <XCircle size={13} />
+                        <XCircle size={12} />
                         Withdraw
                       </Button>
                     </div>
@@ -331,7 +346,9 @@ export function DashboardView({
           <div className="overflow-hidden rounded-2xl border border-border bg-card">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <div className="flex items-center gap-2">
-                <TrendingUp size={16} className="text-muted-foreground" />
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+                  <TrendingUp size={14} className="text-primary" />
+                </div>
                 <h2 className="text-sm font-semibold">Latest activity</h2>
               </div>
               <Button
@@ -339,15 +356,15 @@ export function DashboardView({
                 size="sm"
                 onClick={onOpenRequests}
                 data-testid="dashboard-view-all"
-                className="h-8 gap-1.5 text-xs"
+                className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 View all
-                <ArrowRight size={13} />
+                <ArrowRight size={12} />
               </Button>
             </div>
             <ul className="divide-y divide-border" data-testid="dashboard-recent">
               {recent.length === 0 && (
-                <li className="px-5 py-10 text-center">
+                <li className="px-5 py-12 text-center">
                   <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                     <ClipboardList size={20} className="text-muted-foreground" />
                   </div>
@@ -360,7 +377,7 @@ export function DashboardView({
               {recent.map((e) => (
                 <li
                   key={e.id}
-                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5"
+                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 hover:bg-muted/30 transition-colors"
                 >
                   <div>
                     <span className="text-sm font-medium">{nameOf(e.employeeId)}</span>
@@ -378,6 +395,6 @@ export function DashboardView({
           </div>
         </>
       )}
-        </section>
+    </section>
   );
 }

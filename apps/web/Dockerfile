@@ -18,7 +18,7 @@ COPY apps/web/ apps/web/
 # @repo/web imports @repo/shared's compiled surface (design D6), so build it
 # before the app's `tsc -b && vite build`.
 RUN pnpm --filter @repo/shared build
-ARG VITE_API_URL=http://localhost:3000
+ARG VITE_API_URL=http://localhost:4000
 ENV VITE_API_URL=${VITE_API_URL}
 RUN pnpm --filter @repo/web build
 

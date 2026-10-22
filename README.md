@@ -166,21 +166,21 @@ enforcement mapping (§5 R8) and the decision log (§10 D6–D11).
 
 ```bash
 # 1. Register — creates the organization and its OWNER, and returns a session.
-curl -s -X POST http://localhost:3000/auth/register \
+curl -s -X POST http://localhost:4000/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"owner@acme.example","password":"correct-horse-battery","organizationName":"Acme Payroll"}'
 # → { "user": { … }, "organization": { … }, "role": "OWNER",
 #     "accessToken": "…", "refreshToken": "…", "tokenType": "Bearer", … }
 
 # 2. Submit an event in that organization — copy the accessToken from step 1.
-curl -s -X POST http://localhost:3000/events \
+curl -s -X POST http://localhost:4000/events \
   -H 'Authorization: Bearer <accessToken>' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: smoke-1' \
   -d '{"eventType":"BANK_ACCOUNT_CHANGE","payload":{"employeeId":"EMP-001","effectiveDate":"2026-09-01","iban":"DE89370400440532013000"}}'
 
 # 3. Read it back — only a session in the owning organization can.
-curl -s http://localhost:3000/events/<id> -H 'Authorization: Bearer <accessToken>'
+curl -s http://localhost:4000/events/<id> -H 'Authorization: Bearer <accessToken>'
 ```
 
 ---
@@ -219,19 +219,19 @@ The API image's entrypoint runs `prisma migrate deploy` before starting, so migr
 applied automatically. The worker starts only after the API is healthy (its `depends_on`).
 
 - Demo UI: http://localhost:5173
-- API health: http://localhost:3000/health
-- Swagger: http://localhost:3000/api-docs
+- API health: http://localhost:4000/health
+- Swagger: http://localhost:4000/api-docs
 
 Send a first event to see the pipeline move end-to-end. Submissions are organization-scoped and
 require an access token, so register first (this creates a throwaway organization in the stack's
 database) and copy the `accessToken` from the response:
 
 ```bash
-curl -s -X POST http://localhost:3000/auth/register \
+curl -s -X POST http://localhost:4000/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"owner@acme.example","password":"correct-horse-battery","organizationName":"Acme Payroll"}'
 
-curl -s -X POST http://localhost:3000/events \
+curl -s -X POST http://localhost:4000/events \
   -H 'Authorization: Bearer <accessToken from the register response>' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: smoke-1' \
@@ -454,8 +454,8 @@ pnpm build
 pnpm --filter @repo/api start
 ```
 
-Confirm it is up: http://localhost:3000/health (should report `status: "ok"` once a worker is
-running too), Swagger at http://localhost:3000/api-docs. Either invocation directory works —
+Confirm it is up: http://localhost:4000/health (should report `status: "ok"` once a worker is
+running too), Swagger at http://localhost:4000/api-docs. Either invocation directory works —
 from the workspace root (`pnpm dev:api`) or from inside `apps/api` (`pnpm dev`) — both resolve
 the same `apps/api/.env.development`.
 
@@ -491,7 +491,7 @@ listing the worker heartbeat.
 ## Running the demo UI
 
 ```bash
-# Host dev (Vite dev server; expects the API on http://localhost:3000)
+# Host dev (Vite dev server; expects the API on http://localhost:4000)
 pnpm dev:web                      # → http://localhost:5173
 
 # Or use the packaged nginx build from the Docker stack
@@ -818,8 +818,8 @@ Highlights; the full decision log (⚠️ forward references resolved) is in
 The API is self-documenting via `@nestjs/swagger`, generated from code annotations (no
 hand-maintained spec), available in every environment:
 
-- Swagger UI: http://localhost:3000/api-docs
-- Raw OpenAPI JSON: http://localhost:3000/api-docs-json
+- Swagger UI: http://localhost:4000/api-docs
+- Raw OpenAPI JSON: http://localhost:4000/api-docs-json
 
 The document annotates the protected operations (`POST /events`, `GET /events`,
 `GET /events/:id`, `GET /auth/me`) with a `bearer` security requirement and documents their

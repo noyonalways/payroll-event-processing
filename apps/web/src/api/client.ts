@@ -8,7 +8,7 @@ import type { SessionResponse } from '../lib/types';
  * enabled globally, so the Vite dev server and the nginx container call it
  * directly.
  */
-export const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
 export const JSON_HEADERS = { 'Content-Type': 'application/json' };
 

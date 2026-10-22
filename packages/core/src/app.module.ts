@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import * as Joi from 'joi';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { AUTH_THROTTLE, DEFAULT_THROTTLE } from './auth/throttle.constants';
 import { SkipThrottlerGuard } from './auth/skip-throttle.guard';
 import { PrismaModule, QueueModule } from '@repo/database';

@@ -75,7 +75,7 @@ Because no backend list endpoint exists, the UI SHALL persist its tracked event 
 - **THEN** the rows SHALL be removed from the view and from `localStorage`
 
 ### Requirement: The API location is configurable and the app is containerized
-The UI SHALL read the API base URL from a `VITE_API_URL` build-time environment variable, defaulting to `http://localhost:3000`, and SHALL use it as the base origin for all HTTP requests. The repository SHALL ship a `docker/Dockerfile.frontend` and a `docker-compose.yml` `frontend` service that builds and serves the UI (replacing the static nginx placeholder) such that `docker compose up --build` serves the demo UI at `http://localhost:5173` alongside the API, satisfying the `infrastructure-setup` five-service startup requirement.
+The UI SHALL read the API base URL from a `VITE_API_URL` build-time environment variable, defaulting to `http://localhost:4000`, and SHALL use it as the base origin for all HTTP requests. The repository SHALL ship a `docker/Dockerfile.frontend` and a `docker-compose.yml` `frontend` service that builds and serves the UI (replacing the static nginx placeholder) such that `docker compose up --build` serves the demo UI at `http://localhost:5173` alongside the API, satisfying the `infrastructure-setup` five-service startup requirement.
 
 #### Scenario: Custom API base URL
 - **WHEN** the frontend is built with `VITE_API_URL` set to a non-default origin

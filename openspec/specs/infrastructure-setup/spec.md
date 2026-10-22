@@ -11,7 +11,7 @@ The system SHALL provide a `docker-compose.yml` such that `docker compose up --b
 
 #### Scenario: Full stack startup
 - **WHEN** a developer runs `docker compose up --build` from the workspace root with a valid `apps/api/.env.development` file
-- **THEN** all five services SHALL start without errors and the API SHALL respond to `GET /health` at `http://localhost:3000/health`
+- **THEN** all five services SHALL start without errors and the API SHALL respond to `GET /health` at `http://localhost:4000/health`
 
 #### Scenario: An application image builds from its own Dockerfile
 - **WHEN** a single application's image is built

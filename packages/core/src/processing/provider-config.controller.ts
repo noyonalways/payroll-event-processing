@@ -7,7 +7,6 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
-  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { MembershipRole } from '@prisma/client';
 import { CurrentActor } from '../auth/decorators/current-actor.decorator';

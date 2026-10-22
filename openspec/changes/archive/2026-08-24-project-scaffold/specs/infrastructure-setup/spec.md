@@ -5,7 +5,7 @@ The system SHALL provide a `docker-compose.yml` such that `docker compose up --b
 
 #### Scenario: Full stack startup
 - **WHEN** a developer runs `docker compose up --build` from the project root with a valid `.env` file
-- **THEN** all five services SHALL start without errors and the API SHALL respond to `GET /health` at `http://localhost:3000/health`
+- **THEN** all five services SHALL start without errors and the API SHALL respond to `GET /health` at `http://localhost:4000/health`
 
 ### Requirement: Environment variables are documented
 The repository SHALL contain a `.env.example` file listing every required and optional environment variable with a descriptive comment and a safe default value where applicable.
