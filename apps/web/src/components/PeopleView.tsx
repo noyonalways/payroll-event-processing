@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   Search,
@@ -28,7 +28,7 @@ import {
   requestStatus,
   timeAgo,
 } from '../lib/humanize';
-import type { Employee, EventType } from '../lib/types';
+import type { Employee, EventStatusResponse, EventType } from '../lib/types';
 
 const errorOf = (error: unknown): string =>
   error instanceof Error ? error.message : 'Request failed';
@@ -87,15 +87,28 @@ export function PeopleView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const eventStatusCacheRef = useRef<Map<string, EventStatusResponse>>(new Map());
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
       const page = await fetchEmployeesPage({ limit: 100 });
       setEmployees(page.data);
-      setSelected((prev) =>
-        prev ? (page.data.find((e) => e.id === prev.id) ?? null) : null,
-      );
+      setSelected((prev) => {
+        if (!prev) return null;
+        const found = page.data.find((e) => e.id === prev.id);
+        if (!found) return null;
+        if (
+          found.id === prev.id &&
+          found.employeeNumber === prev.employeeNumber &&
+          found.name === prev.name &&
+          found.department === prev.department
+        ) {
+          return prev;
+        }
+        return found;
+      });
     } catch (err) {
       setListError(errorOf(err));
     } finally {
@@ -107,8 +120,10 @@ export function PeopleView({
     void refresh();
   }, [refresh, refreshKey]);
 
+  const selectedEmployeeNumber = selected?.employeeNumber;
+
   useEffect(() => {
-    if (!selected) {
+    if (!selectedEmployeeNumber) {
       setTimeline([]);
       setCurrent([]);
       return;
@@ -118,7 +133,7 @@ export function PeopleView({
     (async () => {
       try {
         const page = await fetchEventsPage({
-          employeeId: selected.employeeNumber,
+          employeeId: selectedEmployeeNumber,
           limit: 50,
         });
         const rows = page.data;
@@ -133,20 +148,47 @@ export function PeopleView({
         if (cancelled) return;
         setTimeline(timelineRows);
 
-        const latestApplied: string[] = [];
-        for (const type of ['BANK_ACCOUNT_CHANGE', 'SALARY_CHANGE', 'ADDRESS_CHANGE', 'DEPARTMENT_CHANGE'] as EventType[]) {
-          const newest = rows
-            .filter((e) => e.eventType === type && e.status === 'success')
-            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-          if (!newest) continue;
-          try {
-            const status = await fetchEventStatus(newest.id);
-            latestApplied.push(describeAppliedChange(type, status.payload, status.result));
-          } catch {
-            latestApplied.push(`${changeTypeLabel(type)} — applied ${timeAgo(newest.processedAt ?? newest.createdAt)}`);
-          }
-        }
-        if (!cancelled) setCurrent(latestApplied);
+        const eventTypes: EventType[] = [
+          'BANK_ACCOUNT_CHANGE',
+          'SALARY_CHANGE',
+          'ADDRESS_CHANGE',
+          'DEPARTMENT_CHANGE',
+        ];
+
+        const newestEvents = eventTypes
+          .map((type) => {
+            const newest = rows
+              .filter((e) => e.eventType === type && e.status === 'success')
+              .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+            return { type, newest };
+          })
+          .filter((item): item is { type: EventType; newest: (typeof rows)[number] } => Boolean(item.newest));
+
+        const appliedResults: Array<{ index: number; text: string }> = [];
+
+        await Promise.all(
+          newestEvents.map(async ({ type, newest }, index) => {
+            try {
+              let status = eventStatusCacheRef.current.get(newest.id);
+              if (!status) {
+                status = await fetchEventStatus(newest.id);
+                eventStatusCacheRef.current.set(newest.id, status);
+              }
+              appliedResults.push({
+                index,
+                text: describeAppliedChange(type, status.payload, status.result),
+              });
+            } catch {
+              appliedResults.push({
+                index,
+                text: `${changeTypeLabel(type)} — applied ${timeAgo(newest.processedAt ?? newest.createdAt)}`,
+              });
+            }
+          }),
+        );
+
+        appliedResults.sort((a, b) => a.index - b.index);
+        if (!cancelled) setCurrent(appliedResults.map((r) => r.text));
       } catch (err) {
         if (!cancelled) setActionError(errorOf(err));
       } finally {
@@ -156,7 +198,7 @@ export function PeopleView({
     return () => {
       cancelled = true;
     };
-  }, [selected]);
+  }, [selectedEmployeeNumber]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -273,12 +315,21 @@ export function PeopleView({
       {/* Error banners */}
       {actionError && (
         <div
-          className="flex items-center gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
+          className="flex items-center justify-between gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3"
           role="alert"
           data-testid="people-action-error"
         >
-          <AlertTriangle size={15} className="shrink-0 text-destructive" />
-          <p className="text-sm text-destructive">{actionError}</p>
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={15} className="shrink-0 text-destructive" />
+            <p className="text-sm text-destructive">{actionError}</p>
+          </div>
+          <button
+            type="button"
+            className="text-xs font-medium text-destructive/70 hover:text-destructive transition-colors"
+            onClick={() => setActionError(null)}
+          >
+            Dismiss
+          </button>
         </div>
       )}
       {listError && (
@@ -323,7 +374,10 @@ export function PeopleView({
                         ? 'border-primary/40 bg-primary/8 shadow-sm'
                         : 'border-border bg-card hover:border-primary/25 hover:shadow-sm'
                     }`}
-                    onClick={() => setSelected(employee)}
+                    onClick={() => {
+                      setSelected(employee);
+                      setActionError(null);
+                    }}
                     data-testid={`people-row-${employee.employeeNumber}`}
                   >
                     {/* Avatar */}

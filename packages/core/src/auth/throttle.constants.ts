@@ -16,9 +16,9 @@ export const AUTH_THROTTLE = {
 };
 
 export const DEFAULT_THROTTLE = {
-  limit: toInt(process.env.DEFAULT_THROTTLE_LIMIT, 100),
+  limit: toInt(process.env.DEFAULT_THROTTLE_LIMIT, 300),
   ttlMs: toInt(process.env.DEFAULT_THROTTLE_TTL_SECONDS, 60) * 1000,
 };
 
-/** Routes that MUST never be throttled: liveness + scrapes. */
-export const THROTTLE_EXEMPT_PREFIXES = ['/health', '/metrics'];
+/** Routes that MUST never be throttled: liveness + scrapes + persistent SSE stream. */
+export const THROTTLE_EXEMPT_PREFIXES = ['/health', '/metrics', '/events/stream'];
